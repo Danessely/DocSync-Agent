@@ -35,14 +35,16 @@ class GitHubApiClient:
         self._token = token
         self._webhook_secret = webhook_secret
         self._doc_allowlist = doc_allowlist
+        self._default_headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "docsync-agent",
+        }
+        if token:
+            self._default_headers["Authorization"] = f"Bearer {token}"
         self._client = httpx.Client(
             base_url=base_url,
             timeout=timeout,
-            headers={
-                "Authorization": f"Bearer {token}" if token else "",
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "docsync-agent",
-            },
+            headers=self._default_headers,
             transport=transport,
         )
 
@@ -74,7 +76,9 @@ class GitHubApiClient:
         }
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        response = self._client.request(method, path, **kwargs)
+        request_headers = dict(self._default_headers)
+        request_headers.update(kwargs.pop("headers", {}))
+        response = self._client.request(method, path, headers=request_headers, **kwargs)
         if response.status_code >= 400:
             raise GitHubError(f"github_http_{response.status_code}: {response.text}")
         return response
@@ -171,4 +175,3 @@ class GitHubApiClient:
             comment_body=body,
             comment_id=payload.get("id"),
         )
-

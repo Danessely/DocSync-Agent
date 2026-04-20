@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,25 @@ def _split_csv(value: str | None, default: list[str]) -> list[str]:
     if not value:
         return default
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _load_dotenv(path: str | Path = ".env") -> None:
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or key in os.environ:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ[key] = value
 
 
 class Settings(BaseModel):
@@ -32,6 +52,7 @@ class Settings(BaseModel):
 
     @classmethod
     def from_env(cls) -> "Settings":
+        _load_dotenv()
         values: dict[str, Any] = {
             "github_webhook_secret": os.getenv("GITHUB_WEBHOOK_SECRET", ""),
             "github_token": os.getenv("GITHUB_TOKEN", ""),
@@ -54,4 +75,3 @@ class Settings(BaseModel):
             "log_level": os.getenv("LOG_LEVEL", "INFO"),
         }
         return cls(**values)
-

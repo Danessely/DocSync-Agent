@@ -4,7 +4,7 @@ import re
 
 from .models import ChangeIntent, PullRequestSnapshot
 
-FUNCTION_RE = re.compile(r"^\+\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\((.*?)\):", re.MULTILINE)
+FUNCTION_RE = re.compile(r"^\+\s*def\s+([A-Za-z0-9_]*)\((.*?)\)\s*(?:->\s*[^:]+)?:", re.MULTILINE)
 CLI_RE = re.compile(r"^\+\s*.*add_argument\(['\"](--[A-Za-z0-9_-]+)", re.MULTILINE)
 CLASS_RE = re.compile(r"^\+\s*class\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
 

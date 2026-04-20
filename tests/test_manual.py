@@ -100,10 +100,11 @@ def test_run_snapshot_returns_comment_preview(tmp_path) -> None:
     assert "timeout" in comments[0]
 
 
-def test_manual_main_json_output(tmp_path, capsys) -> None:
+def test_manual_main_json_output(tmp_path, capsys, monkeypatch) -> None:
     bundle = make_bundle()
     path = tmp_path / "snapshot.json"
     path.write_text(bundle.model_dump_json(indent=2), encoding="utf-8")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
 
     exit_code = main([str(path), "--json"])
     output = capsys.readouterr().out
