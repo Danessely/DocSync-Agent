@@ -19,9 +19,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 class DocSyncWorkflow:
-    def __init__(self, settings: Settings, github_client, llm_client) -> None:
+    def __init__(self, settings: Settings, github_client, llm_client, telegram_client=None) -> None:
         self._settings = settings
-        self._nodes = WorkflowNodes(settings, github_client, llm_client)
+        self._nodes = WorkflowNodes(settings, github_client, llm_client, telegram_client=telegram_client)
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -35,6 +35,7 @@ class DocSyncWorkflow:
         graph.add_node("build_patch", self._nodes.build_patch)
         graph.add_node("validate", self._nodes.validate)
         graph.add_node("publish", self._nodes.publish)
+        graph.add_node("clarify", self._nodes.clarify)
         graph.add_node("complete", self._nodes.complete)
 
         graph.add_edge(START, "ingest")
@@ -58,11 +59,16 @@ class DocSyncWorkflow:
         graph.add_conditional_edges(
             "generate",
             route_after_generate,
-            {"build_patch": "build_patch", "publish": "publish"},
+            {"build_patch": "build_patch", "publish": "publish", "clarify": "clarify"},
         )
         graph.add_edge("build_patch", "validate")
-        graph.add_conditional_edges("validate", route_after_validate, {"publish": "publish"})
+        graph.add_conditional_edges(
+            "validate",
+            route_after_validate,
+            {"publish": "publish", "clarify": "clarify"},
+        )
         graph.add_edge("publish", "complete")
+        graph.add_edge("clarify", "complete")
         graph.add_edge("complete", END)
         return graph.compile()
 
@@ -92,13 +98,22 @@ class DocSyncWorkflow:
 
         state.update(self._nodes.build_context(state))
         state.update(self._nodes.generate(state))
-        if route_after_generate(state) == "publish":
+        next_step = route_after_generate(state)
+        if next_step == "clarify":
+            state.update(self._nodes.clarify(state))
+            state.update(self._nodes.complete(state))
+            return state
+        if next_step == "publish":
             state.update(self._nodes.publish(state))
             state.update(self._nodes.complete(state))
             return state
 
         state.update(self._nodes.build_patch(state))
         state.update(self._nodes.validate(state))
+        if route_after_validate(state) == "clarify":
+            state.update(self._nodes.clarify(state))
+            state.update(self._nodes.complete(state))
+            return state
         if route_after_validate(state) == "publish":
             state.update(self._nodes.publish(state))
         state.update(self._nodes.complete(state))

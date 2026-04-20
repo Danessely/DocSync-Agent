@@ -4,6 +4,7 @@ from typing import Any, TypedDict
 
 from ..models import (
     ChangeIntent,
+    ClarificationResult,
     DocPatch,
     GenerationDecision,
     GenerationInput,
@@ -31,6 +32,6 @@ class PRSessionState(TypedDict, total=False):
     doc_patch: DocPatch
     validation_report: ValidationReport
     publish_result: PublishResult
+    clarification_result: ClarificationResult
     outcome: str
     error_code: str
-

@@ -23,6 +23,7 @@ def make_bundle() -> SnapshotBundle:
         body="Snapshot replay for local testing.",
         base_sha="base123",
         head_sha="head123",
+        head_ref="feature/docsync",
         changed_files=[
             ChangedFile(
                 path="src/client.py",
@@ -47,6 +48,7 @@ def make_bundle() -> SnapshotBundle:
 Use `fetch_data(url)` to request data.
 """
         },
+        doc_file_shas={"README.md": "sha-readme"},
     )
     return SnapshotBundle(
         event_payload={

@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from .adapters.github import GitHubApiClient
 from .adapters.llm import ChatOpenAILLMClient, MockLLMClient
+from .adapters.telegram import TelegramBotClient
 from .config import Settings
 from .graph.workflow import DocSyncWorkflow
 
@@ -18,10 +19,21 @@ def _build_llm_client(settings: Settings):
     return ChatOpenAILLMClient(settings)
 
 
+def _build_telegram_client(settings: Settings):
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        return None
+    return TelegramBotClient(
+        bot_token=settings.telegram_bot_token,
+        chat_id=settings.telegram_chat_id,
+        timeout=settings.telegram_timeout_sec,
+    )
+
+
 def create_app(
     settings: Settings | None = None,
     github_client=None,
     llm_client=None,
+    telegram_client=None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -32,12 +44,14 @@ def create_app(
         doc_allowlist=settings.doc_path_allowlist,
     )
     llm_client = llm_client or _build_llm_client(settings)
-    workflow = DocSyncWorkflow(settings, github_client, llm_client)
+    telegram_client = telegram_client or _build_telegram_client(settings)
+    workflow = DocSyncWorkflow(settings, github_client, llm_client, telegram_client=telegram_client)
 
     app = FastAPI(title="DocSync Agent")
     app.state.settings = settings
     app.state.workflow = workflow
     app.state.github_client = github_client
+    app.state.telegram_client = telegram_client
 
     @app.get("/health")
     def health() -> dict[str, str]:

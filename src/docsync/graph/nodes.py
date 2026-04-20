@@ -7,7 +7,7 @@ from textwrap import dedent
 
 from ..analysis import analyze_pull_request
 from ..config import Settings
-from ..models import DocPatch, GenerationInput
+from ..models import ClarificationResult, DocPatch, GenerationInput
 from ..patching.builder import PatchBuilder
 from ..retrieval.search import retrieve_context
 from ..validation.validator import PatchValidator
@@ -22,10 +22,12 @@ class WorkflowNodes:
         settings: Settings,
         github_client,
         llm_client,
+        telegram_client=None,
     ) -> None:
         self._settings = settings
         self._github = github_client
         self._llm = llm_client
+        self._telegram = telegram_client
         self._patch_builder = PatchBuilder()
         self._validator = PatchValidator(settings)
 
@@ -48,6 +50,7 @@ class WorkflowNodes:
             "event_action": event["action"],
             "session_id": session_id,
             "trace_id": session_id,
+            "min_confidence": self._settings.min_confidence,
         }
 
     def load_pr(self, state: PRSessionState) -> PRSessionState:
@@ -116,18 +119,77 @@ class WorkflowNodes:
             return {"stage": "publish", "publish_result": result, "outcome": "ignored"}
 
         if self._settings.dry_run:
-            publish_result = {
-                "mode": self._settings.publish_mode,
-                "published": False,
-                "comment_body": body,
-            }
+            mode = "commit_patch" if self._should_commit_patch(state) else "comment_only"
+            publish_result = {"mode": mode, "published": False, "comment_body": body}
+        elif self._should_commit_patch(state):
+            patch = state["doc_patch"]
+            summary = state.get("llm_decision").comment if state.get("llm_decision") else patch.summary
+            publish_result = self._github.publish_patch(
+                snapshot,
+                patch,
+                state["session_id"],
+                summary,
+            ).model_dump()
         else:
             publish_result = self._github.publish_comment(snapshot.repo, snapshot.pr_number, body).model_dump()
-        outcome = "commented" if publish_result["comment_body"] else "failed"
+        if publish_result["mode"] == "commit_patch" and (publish_result["published"] or self._settings.dry_run):
+            outcome = "patched"
+        elif publish_result["comment_body"]:
+            outcome = "commented"
+        else:
+            outcome = "failed"
         return {"stage": "publish", "publish_result": publish_result, "outcome": outcome}
+
+    def clarify(self, state: PRSessionState) -> PRSessionState:
+        snapshot = state.get("pr_snapshot")
+        question = self._format_clarification_question(state)
+        if snapshot is None:
+            return {
+                "stage": "clarify",
+                "outcome": "failed",
+                "error_code": "missing_pr_snapshot",
+            }
+
+        if self._settings.dry_run:
+            return {
+                "stage": "clarify",
+                "clarification_result": {
+                    "channel": "telegram",
+                    "sent": False,
+                    "message": question,
+                },
+                "outcome": "asked_human",
+            }
+
+        if self._telegram is None:
+            publish_result = self._github.publish_comment(snapshot.repo, snapshot.pr_number, question).model_dump()
+            return {
+                "stage": "clarify",
+                "publish_result": publish_result,
+                "outcome": "commented",
+                "error_code": "telegram_not_configured",
+            }
+
+        clarification_result = ClarificationResult.model_validate(
+            self._telegram.send_message(question)
+        ).model_dump()
+        return {
+            "stage": "clarify",
+            "clarification_result": clarification_result,
+            "outcome": "asked_human",
+        }
 
     def complete(self, state: PRSessionState) -> PRSessionState:
         return {"stage": "complete"}
+
+    def _should_commit_patch(self, state: PRSessionState) -> bool:
+        validation = state.get("validation_report")
+        return bool(
+            self._settings.publish_mode == "commit_patch"
+            and validation
+            and validation.is_valid
+            and state.get("doc_patch")
+        )
 
     def _format_comment(self, state: PRSessionState) -> str:
         intent = state.get("change_intent")
@@ -165,3 +227,31 @@ class WorkflowNodes:
             """
         ).strip()
 
+    def _format_clarification_question(self, state: PRSessionState) -> str:
+        snapshot = state.get("pr_snapshot")
+        decision = state.get("llm_decision")
+        validation = state.get("validation_report")
+        intent = state.get("change_intent")
+        reasons = validation.reasons if validation else []
+
+        if decision and decision.decision == "ask_human":
+            reason = decision.comment
+        elif decision and decision.confidence < self._settings.min_confidence:
+            reason = (
+                f"Model confidence is too low ({decision.confidence:.2f} < {self._settings.min_confidence:.2f}). "
+                f"{decision.comment}"
+            )
+        elif reasons:
+            reason = "; ".join(reasons)
+        else:
+            reason = "The documentation update could not be safely published automatically."
+
+        return dedent(
+            f"""
+            DocSync needs clarification for PR #{snapshot.pr_number if snapshot else "unknown"} in {snapshot.repo if snapshot else "unknown"}.
+            Change scenario: {intent.scenario if intent else "unknown"}.
+            Reason: {reason}
+
+            Please confirm the intended documentation update or describe the expected behavior change.
+            """
+        ).strip()

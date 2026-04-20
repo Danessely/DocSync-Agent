@@ -14,6 +14,7 @@ class FakeGitHubClient:
     def __init__(self, snapshot: PullRequestSnapshot) -> None:
         self.snapshot = snapshot
         self.published_bodies: list[str] = []
+        self.published_patches: list[dict[str, object]] = []
 
     def verify_webhook_signature(self, body: bytes, signature: str | None) -> bool:
         return True
@@ -35,6 +36,39 @@ class FakeGitHubClient:
     def publish_comment(self, repo: str, pr_number: int, body: str) -> PublishResult:
         self.published_bodies.append(body)
         return PublishResult(mode="comment_only", published=True, comment_body=body, comment_id=1)
+
+    def publish_patch(
+        self,
+        snapshot: PullRequestSnapshot,
+        patch,
+        session_id: str,
+        summary: str,
+    ) -> PublishResult:
+        self.published_patches.append(
+            {
+                "repo": snapshot.repo,
+                "pr_number": snapshot.pr_number,
+                "files": [entry.doc_path for entry in patch.entries],
+                "session_id": session_id,
+                "summary": summary,
+            }
+        )
+        return PublishResult(
+            mode="commit_patch",
+            published=True,
+            commit_shas=["commit123"],
+            committed_files=[entry.doc_path for entry in patch.entries],
+            details=summary,
+        )
+
+
+class FakeTelegramClient:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def send_message(self, text: str):
+        self.messages.append(text)
+        return {"channel": "telegram", "sent": True, "message": text}
 
 
 class StubLLMClient:
@@ -67,6 +101,7 @@ def make_snapshot(diff_text: str | None = None) -> PullRequestSnapshot:
         body="Updates the API call to accept timeout.",
         base_sha="base123",
         head_sha="head123",
+        head_ref="feature/docsync",
         changed_files=[
             ChangedFile(
                 path="src/client.py",
@@ -99,6 +134,7 @@ Use `fetch_data(url)` to request data.
 Run the command from a terminal.
 """,
         },
+        doc_file_shas={"README.md": "sha-readme", "docs/cli.md": "sha-cli"},
     )
 
 
@@ -194,6 +230,96 @@ def test_validator_rejects_path_outside_allowlist() -> None:
 
     assert result["validation_report"].status == "fallback_comment"
     assert "outside allowlist" in github.published_bodies[0]
+
+
+def test_workflow_commit_patch_mode_publishes_patch_to_branch() -> None:
+    snapshot = make_snapshot()
+    github = FakeGitHubClient(snapshot)
+    llm = StubLLMClient(
+        GenerationDecision(
+            decision="update",
+            confidence=0.95,
+            comment="Document the timeout parameter.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": "- `timeout` controls request timeout in seconds.",
+                    "rationale": "The API signature changed.",
+                }
+            ],
+        )
+    )
+    workflow = DocSyncWorkflow(make_settings(publish_mode="commit_patch"), github, llm)
+
+    result = workflow.run_once(make_payload())
+
+    assert result["outcome"] == "patched"
+    assert github.published_patches
+    assert github.published_patches[0]["files"] == ["README.md"]
+    assert not github.published_bodies
+
+
+def test_low_confidence_routes_to_telegram_clarification() -> None:
+    snapshot = make_snapshot()
+    github = FakeGitHubClient(snapshot)
+    telegram = FakeTelegramClient()
+    llm = StubLLMClient(
+        GenerationDecision(
+            decision="update",
+            confidence=0.3,
+            comment="I am not confident which docs should change.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": "- possible update",
+                    "rationale": "uncertain",
+                }
+            ],
+        )
+    )
+    workflow = DocSyncWorkflow(make_settings(min_confidence=0.6), github, llm, telegram_client=telegram)
+
+    result = workflow.run_once(make_payload())
+
+    assert result["outcome"] == "asked_human"
+    assert telegram.messages
+    assert "confidence is too low" in telegram.messages[0]
+    assert not github.published_bodies
+    assert not github.published_patches
+
+
+def test_validation_failure_routes_to_telegram_clarification() -> None:
+    snapshot = make_snapshot()
+    github = FakeGitHubClient(snapshot)
+    telegram = FakeTelegramClient()
+    llm = StubLLMClient(
+        GenerationDecision(
+            decision="update",
+            confidence=0.95,
+            comment="Bad path.",
+            proposed_changes=[
+                {
+                    "doc_path": "notes/todo.md",
+                    "section_title": "Todo",
+                    "operation": "append",
+                    "content": "- unexpected change",
+                    "rationale": "invalid",
+                }
+            ],
+        )
+    )
+    workflow = DocSyncWorkflow(make_settings(), github, llm, telegram_client=telegram)
+
+    result = workflow.run_once(make_payload())
+
+    assert result["outcome"] == "asked_human"
+    assert telegram.messages
+    assert "outside allowlist" in telegram.messages[0]
+    assert not github.published_bodies
 
 
 def test_llm_client_retries_once_on_invalid_schema() -> None:

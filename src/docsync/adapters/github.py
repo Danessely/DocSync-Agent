@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 
-from ..models import ChangedFile, PublishResult, PullRequestSnapshot
+from ..models import ChangedFile, DocPatch, PublishResult, PullRequestSnapshot
 
 
 class GitHubError(RuntimeError):
@@ -20,6 +20,13 @@ class GitHubClient(Protocol):
     def parse_pull_request_event(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
     def load_pull_request(self, repo: str, pr_number: int) -> PullRequestSnapshot: ...
     def publish_comment(self, repo: str, pr_number: int, body: str) -> PublishResult: ...
+    def publish_patch(
+        self,
+        snapshot: PullRequestSnapshot,
+        patch: DocPatch,
+        session_id: str,
+        summary: str,
+    ) -> PublishResult: ...
 
 
 class GitHubApiClient:
@@ -117,8 +124,9 @@ class GitHubApiClient:
             page += 1
 
         head_sha = ((pr_data.get("head") or {}).get("sha") or "")
+        head_ref = ((pr_data.get("head") or {}).get("ref") or "")
         base_sha = ((pr_data.get("base") or {}).get("sha") or "")
-        doc_files = self._load_doc_files(repo, head_sha)
+        doc_files, doc_file_shas = self._load_doc_files(repo, head_sha)
 
         return PullRequestSnapshot(
             repo=repo,
@@ -127,12 +135,14 @@ class GitHubApiClient:
             body=pr_data.get("body") or "",
             base_sha=base_sha,
             head_sha=head_sha,
+            head_ref=head_ref,
             changed_files=files,
             diff_text=diff_resp.text,
             doc_files=doc_files,
+            doc_file_shas=doc_file_shas,
         )
 
-    def _load_doc_files(self, repo: str, sha: str) -> dict[str, str]:
+    def _load_doc_files(self, repo: str, sha: str) -> tuple[dict[str, str], dict[str, str]]:
         tree_resp = self._request("GET", f"/repos/{repo}/git/trees/{sha}", params={"recursive": 1})
         tree = tree_resp.json().get("tree", [])
         doc_paths = [
@@ -142,6 +152,7 @@ class GitHubApiClient:
         ]
 
         docs: dict[str, str] = {}
+        doc_shas: dict[str, str] = {}
         for path in doc_paths:
             content_resp = self._request(
                 "GET",
@@ -152,7 +163,9 @@ class GitHubApiClient:
             if content_data.get("encoding") != "base64":
                 continue
             docs[path] = base64.b64decode(content_data["content"]).decode("utf-8")
-        return docs
+            if content_data.get("sha"):
+                doc_shas[path] = content_data["sha"]
+        return docs, doc_shas
 
     def _is_allowed_path(self, path: str) -> bool:
         for allowed in self._doc_allowlist:
@@ -174,4 +187,45 @@ class GitHubApiClient:
             published=True,
             comment_body=body,
             comment_id=payload.get("id"),
+        )
+
+    def publish_patch(
+        self,
+        snapshot: PullRequestSnapshot,
+        patch: DocPatch,
+        session_id: str,
+        summary: str,
+    ) -> PublishResult:
+        if not snapshot.head_ref:
+            raise GitHubError("missing_head_ref_for_patch_publish")
+
+        commit_shas: list[str] = []
+        committed_files: list[str] = []
+        for entry in patch.entries:
+            body: dict[str, Any] = {
+                "message": f"docsync: update docs for PR #{snapshot.pr_number} ({session_id})",
+                "content": base64.b64encode(entry.new_content.encode("utf-8")).decode("utf-8"),
+                "branch": snapshot.head_ref,
+            }
+            current_sha = snapshot.doc_file_shas.get(entry.doc_path)
+            if current_sha:
+                body["sha"] = current_sha
+            response = self._request(
+                "PUT",
+                f"/repos/{snapshot.repo}/contents/{quote(entry.doc_path, safe='')}",
+                json=body,
+            )
+            payload = response.json()
+            commit_sha = (payload.get("commit") or {}).get("sha")
+            if commit_sha:
+                commit_shas.append(commit_sha)
+            committed_files.append(entry.doc_path)
+
+        return PublishResult(
+            mode="commit_patch",
+            published=bool(committed_files),
+            comment_body="",
+            commit_shas=commit_shas,
+            committed_files=committed_files,
+            details=summary,
         )

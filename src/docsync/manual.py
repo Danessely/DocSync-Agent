@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .adapters.llm import ChatOpenAILLMClient, MockLLMClient
+from .adapters.telegram import TelegramBotClient
 from .config import Settings
 from .graph.workflow import DocSyncWorkflow
 from .models import PublishResult, PullRequestSnapshot
@@ -22,6 +23,7 @@ class SnapshotGitHubClient:
     def __init__(self, snapshot: PullRequestSnapshot) -> None:
         self._snapshot = snapshot
         self.published_comments: list[str] = []
+        self.published_patches: list[dict[str, object]] = []
 
     def verify_webhook_signature(self, body: bytes, signature: str | None) -> bool:
         return True
@@ -50,6 +52,22 @@ class SnapshotGitHubClient:
         self.published_comments.append(body)
         return PublishResult(mode="comment_only", published=True, comment_body=body, comment_id=1)
 
+    def publish_patch(self, snapshot: PullRequestSnapshot, patch, session_id: str, summary: str) -> PublishResult:
+        self.published_patches.append(
+            {
+                "session_id": session_id,
+                "summary": summary,
+                "files": [entry.doc_path for entry in patch.entries],
+            }
+        )
+        return PublishResult(
+            mode="commit_patch",
+            published=True,
+            commit_shas=["snapshot-commit"],
+            committed_files=[entry.doc_path for entry in patch.entries],
+            details=summary,
+        )
+
 
 def load_snapshot_bundle(path: str | Path) -> SnapshotBundle:
     return SnapshotBundle.model_validate_json(Path(path).read_text(encoding="utf-8"))
@@ -61,6 +79,16 @@ def _build_llm_client(settings: Settings):
     return ChatOpenAILLMClient(settings)
 
 
+def _build_telegram_client(settings: Settings):
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        return None
+    return TelegramBotClient(
+        bot_token=settings.telegram_bot_token,
+        chat_id=settings.telegram_chat_id,
+        timeout=settings.telegram_timeout_sec,
+    )
+
+
 def run_snapshot(
     snapshot_path: str | Path,
     settings: Settings | None = None,
@@ -70,7 +98,8 @@ def run_snapshot(
     bundle = load_snapshot_bundle(snapshot_path)
     github_client = SnapshotGitHubClient(bundle.pr_snapshot)
     llm_client = llm_client or _build_llm_client(settings)
-    workflow = DocSyncWorkflow(settings, github_client, llm_client)
+    telegram_client = _build_telegram_client(settings)
+    workflow = DocSyncWorkflow(settings, github_client, llm_client, telegram_client=telegram_client)
     result = workflow.run_once(bundle.event_payload)
     return result, github_client.published_comments
 

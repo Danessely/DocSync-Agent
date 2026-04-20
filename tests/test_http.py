@@ -39,6 +39,15 @@ class FakeGitHubClient:
         self.published.append(body)
         return PublishResult(mode="comment_only", published=True, comment_body=body, comment_id=42)
 
+    def publish_patch(self, snapshot: PullRequestSnapshot, patch, session_id: str, summary: str) -> PublishResult:
+        return PublishResult(
+            mode="commit_patch",
+            published=True,
+            commit_shas=["commit123"],
+            committed_files=[entry.doc_path for entry in patch.entries],
+            details=summary,
+        )
+
 
 class FakeLLMClient:
     def generate_decision(self, payload):
@@ -65,6 +74,7 @@ def make_snapshot() -> PullRequestSnapshot:
         title="Add timeout parameter",
         body="",
         head_sha="sha123",
+        head_ref="feature/docsync",
         diff_text="""diff --git a/src/client.py b/src/client.py
 @@
 -def fetch_data(url):
@@ -72,6 +82,7 @@ def make_snapshot() -> PullRequestSnapshot:
 """,
         changed_files=[ChangedFile(path="src/client.py", patch="+def fetch_data(url, timeout=30):")],
         doc_files={"README.md": "# Project\n\n## API\n\nUse `fetch_data(url)`.\n"},
+        doc_file_shas={"README.md": "sha-readme"},
     )
 
 

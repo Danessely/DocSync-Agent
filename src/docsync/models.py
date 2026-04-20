@@ -18,9 +18,11 @@ class PullRequestSnapshot(BaseModel):
     body: str = ""
     base_sha: str = ""
     head_sha: str
+    head_ref: str = ""
     changed_files: list[ChangedFile] = Field(default_factory=list)
     diff_text: str
     doc_files: dict[str, str] = Field(default_factory=dict)
+    doc_file_shas: dict[str, str] = Field(default_factory=dict)
 
 
 class ChangeIntent(BaseModel):
@@ -88,7 +90,16 @@ class ValidationReport(BaseModel):
 class PublishResult(BaseModel):
     mode: str
     published: bool
-    comment_body: str
+    comment_body: str = ""
     comment_id: int | None = None
+    commit_shas: list[str] = Field(default_factory=list)
+    committed_files: list[str] = Field(default_factory=list)
+    details: str | None = None
     error: str | None = None
 
+
+class ClarificationResult(BaseModel):
+    channel: str
+    sent: bool
+    message: str
+    error: str | None = None

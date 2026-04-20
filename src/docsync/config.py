@@ -35,6 +35,9 @@ def _load_dotenv(path: str | Path = ".env") -> None:
 class Settings(BaseModel):
     github_webhook_secret: str = ""
     github_token: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_timeout_sec: int = 10
     llm_provider: str = "mock"
     llm_model: str = "mock-model"
     llm_timeout_sec: int = 20
@@ -56,6 +59,9 @@ class Settings(BaseModel):
         values: dict[str, Any] = {
             "github_webhook_secret": os.getenv("GITHUB_WEBHOOK_SECRET", ""),
             "github_token": os.getenv("GITHUB_TOKEN", ""),
+            "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
+            "telegram_timeout_sec": int(os.getenv("TELEGRAM_TIMEOUT_SEC", "10")),
             "llm_provider": os.getenv("LLM_PROVIDER", "mock"),
             "llm_model": os.getenv("LLM_MODEL", "mock-model"),
             "llm_timeout_sec": int(os.getenv("LLM_TIMEOUT_SEC", "20")),

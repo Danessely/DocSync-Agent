@@ -19,11 +19,21 @@ cp .env.sample .env
 - `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_TOKEN`
 
+Для отправки уточняющих вопросов через Telegram заполните:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
 Если используется реальный LLM provider вместо mock, также заполните:
 
 - `LLM_PROVIDER`
 - `LLM_MODEL`
 - `LLM_API_KEY`
+
+Режим публикации результата задаётся через `PUBLISH_MODE`:
+
+- `comment_only` — оставить comment с patch preview
+- `commit_patch` — закоммитить doc-изменения прямо в head branch PR
 
 ### Проверка тестами
 
