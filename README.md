@@ -12,19 +12,19 @@
 cp .env.sample .env
 ```
 
-Для локального прогона snapshot runner достаточно оставить `LLM_PROVIDER=mock`.
+Для локального прогона снапшота достаточно оставить `LLM_PROVIDER=mock`.
 
-Для webhook-режима понадобятся:
+Для webhook-режима необходимо [настроить webhook](https://docs.github.com/ru/webhooks/using-webhooks/creating-webhooks#creating-a-repository-webhook) с токеном на Pull Request в репозитории, понадобятся переменные:
 
-- `GITHUB_WEBHOOK_SECRET`
+- `GITHUB_WEBHOOK_SECRET` — для проверки запросов
 - `GITHUB_TOKEN`
 
 Для отправки уточняющих вопросов через Telegram заполните:
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+- `TELEGRAM_BOT_TOKEN` — токен бота
+- `TELEGRAM_CHAT_ID` — ID пользователя, которому нужно отправлять сообщения
 
-Если используется реальный LLM provider вместо mock, также заполните:
+Для работы с LLM OpenAI-like API, также заполните:
 
 - `LLM_PROVIDER`
 - `LLM_MODEL`
@@ -35,7 +35,7 @@ cp .env.sample .env
 - `comment_only` — оставить comment с patch preview
 - `commit_patch` — закоммитить doc-изменения прямо в head branch PR
 
-Локальное состояние сессий и deduplication по `head_sha` сохраняются в файл, путь задаётся через `SESSION_STORE_PATH`.
+Локальное состояние сессий и дедупликация по `head_sha` сохраняются в файл, путь задаётся через `SESSION_STORE_PATH`.
 По умолчанию используется `.docsync/session_store.json`.
 
 Для дополнительной технической проверки документации можно задать `DOCS_VALIDATION_COMMAND`.
@@ -49,7 +49,7 @@ cp .env.sample .env
 - `GITHUB_MAX_RETRIES`
 - `GITHUB_BACKOFF_BASE_SEC`
 
-После исчерпания ретраев publish-запрос завершается состоянием `failed_publish`, а не аварийным падением пайплайна.
+После исчерпания ретраев publish-запрос завершается состоянием `failed_publish`.
 
 ### Проверка тестами
 
@@ -77,7 +77,7 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m docsync.manual tests/fixtures/sample
 
 ### Eval harness
 
-В репозитории есть минимальный eval corpus в `evals/cases/`.
+В репозитории есть минимальный набор для оценки в `evals/cases/`.
 Запуск всего набора:
 
 ```bash
@@ -102,5 +102,3 @@ UV_CACHE_DIR=/tmp/uv-cache uv run python -m docsync.main
 
 - `GET /health`
 - `POST /webhooks/github`
-
-На текущем этапе PoC безопаснее всего проверять бизнес-логику через тесты или snapshot runner. Webhook-режим рассчитан на реальный GitHub PR event и реальный GitHub API token.
