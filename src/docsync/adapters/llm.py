@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from langchain_openai import ChatOpenAI
-from pydantic import ValidationError
 
 from ..config import Settings
 from ..models import (
@@ -35,15 +34,6 @@ class LLMClient(Protocol):
     def generate_decision(self, payload: GenerationInput) -> GenerationDecision: ...
 
 
-def _strip_code_fences(content: str) -> str:
-    stripped = content.strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if len(lines) >= 3:
-            return "\n".join(lines[1:-1]).strip()
-    return stripped
-
-
 class ChatOpenAILLMClient:
     def __init__(
         self,
@@ -58,7 +48,6 @@ class ChatOpenAILLMClient:
             max_retries=0,
             api_key=settings.llm_api_key or None,
             base_url=settings.llm_api_base_url or None,
-            model_kwargs={"response_format": {"type": "json_object"}},
         )
 
     def analyze_change(self, snapshot: PullRequestSnapshot) -> ChangeIntent:
@@ -118,10 +107,12 @@ class ChatOpenAILLMClient:
         return self._request_model(build_messages(payload), GenerationDecision)
 
     def _request_model(self, messages: list[dict[str, str]], response_model: type[Any]) -> Any:
-        content = self._request_completion(messages)
+        structured_model = self._build_structured_model(response_model)
         try:
-            return response_model.model_validate_json(_strip_code_fences(content))
-        except ValidationError:
+            return structured_model.invoke(messages)
+        except Exception as exc:
+            if not _is_schema_error(exc):
+                raise LLMError("provider_error") from exc
             repair_messages = messages + [
                 {
                     "role": "user",
@@ -131,42 +122,32 @@ class ChatOpenAILLMClient:
                     ),
                 }
             ]
-            repaired = self._request_completion(repair_messages)
             try:
-                return response_model.model_validate_json(_strip_code_fences(repaired))
-            except ValidationError as exc:
-                raise LLMError("invalid_schema") from exc
+                return structured_model.invoke(repair_messages)
+            except Exception as retry_exc:
+                if _is_schema_error(retry_exc):
+                    raise LLMError("invalid_schema") from retry_exc
+                raise LLMError("provider_error") from retry_exc
 
-    def _request_completion(self, messages: list[dict[str, str]]) -> str:
+    def _build_structured_model(self, response_model: type[Any]) -> Any:
         try:
-            response = self._chat_model.invoke(messages)
+            return self._chat_model.with_structured_output(
+                response_model,
+                method="json_schema",
+                strict=True,
+            )
         except Exception as exc:
-            raise LLMError("provider_error") from exc
-
-        try:
-            return _extract_content_text(response)
-        except (AttributeError, TypeError, ValueError) as exc:
             raise LLMError("invalid_provider_payload") from exc
 
 
-def _extract_content_text(message: Any) -> str:
-    content = getattr(message, "content", None)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                parts.append(part)
-                continue
-            if isinstance(part, dict):
-                text = part.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        flattened = "\n".join(part for part in parts if part).strip()
-        if flattened:
-            return flattened
-    raise ValueError("Response did not include string content.")
+def _is_schema_error(exc: Exception) -> bool:
+    return exc.__class__.__name__ in {
+        "ValidationError",
+        "OutputParserException",
+        "SchemaValidationError",
+        "ValueError",
+        "TypeError",
+    }
 
 
 class MockLLMClient:

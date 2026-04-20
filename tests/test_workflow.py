@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from types import SimpleNamespace
-
 from docsync.adapters.llm import ChatOpenAILLMClient
 from docsync.config import Settings
 from docsync.graph.workflow import DocSyncWorkflow
@@ -545,28 +543,34 @@ def test_resume_from_clarification_publishes_after_user_reply() -> None:
 
 def test_llm_client_retries_once_on_invalid_schema() -> None:
     calls = {"count": 0}
+    structured_calls: list[tuple[str, str, bool]] = []
 
-    class FakeChatModel:
+    class FakeStructuredRunnable:
         def __init__(self) -> None:
             self._responses = iter(
                 [
-                    SimpleNamespace(content='{"decision":"update"}'),
-                    SimpleNamespace(
-                        content="""
-                        {
-                          "decision": "skip",
-                          "confidence": 0.2,
-                          "comment": "Need more context",
-                          "proposed_changes": []
-                        }
-                        """
+                    ValueError("invalid schema"),
+                    GenerationDecision(
+                        decision="skip",
+                        confidence=0.2,
+                        comment="Need more context",
+                        proposed_changes=[],
                     ),
                 ]
             )
 
         def invoke(self, messages):
+            del messages
             calls["count"] += 1
-            return next(self._responses)
+            result = next(self._responses)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    class FakeChatModel:
+        def with_structured_output(self, response_model, method, strict):
+            structured_calls.append((response_model.__name__, method, strict))
+            return FakeStructuredRunnable()
 
     settings = make_settings(llm_provider="openai", llm_api_base_url="https://llm.test", llm_model="gpt-test")
     client = ChatOpenAILLMClient(settings, chat_model=FakeChatModel())
@@ -582,3 +586,4 @@ def test_llm_client_retries_once_on_invalid_schema() -> None:
 
     assert decision.decision == "skip"
     assert calls["count"] == 2
+    assert structured_calls == [("GenerationDecision", "json_schema", True)]
