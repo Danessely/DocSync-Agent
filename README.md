@@ -75,6 +75,21 @@ JSON-режим:
 UV_CACHE_DIR=/tmp/uv-cache uv run python -m docsync.manual tests/fixtures/sample_snapshot.json --json
 ```
 
+### Eval harness
+
+В репозитории есть минимальный eval corpus в `evals/cases/`.
+Запуск всего набора:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run python -m docsync.evals evals/cases
+```
+
+JSON-режим:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run python -m docsync.evals evals/cases --json
+```
+
 ### Webhook-сервер
 
 Запуск приложения:

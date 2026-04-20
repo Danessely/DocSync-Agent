@@ -1,0 +1,38 @@
+{
+  "name": "function-parameter",
+  "scenario": "function_parameter",
+  "tags": ["api", "parameter"],
+  "event_payload": {
+    "action": "opened",
+    "repository": {"full_name": "acme/project"},
+    "pull_request": {"number": 101, "head": {"sha": "head101"}}
+  },
+  "pr_snapshot": {
+    "repo": "acme/project",
+    "pr_number": 101,
+    "title": "Add timeout parameter",
+    "body": "The client now accepts a timeout.",
+    "base_sha": "base101",
+    "head_sha": "head101",
+    "head_ref": "feature/timeout",
+    "changed_files": [
+      {
+        "path": "src/client.py",
+        "status": "modified",
+        "patch": "@@\n-def fetch_data(url):\n+def fetch_data(url, timeout=30):\n"
+      }
+    ],
+    "diff_text": "diff --git a/src/client.py b/src/client.py\n@@\n-def fetch_data(url):\n+def fetch_data(url, timeout=30):\n",
+    "doc_files": {
+      "README.md": "# Project\n\n## API\n\nUse `fetch_data(url)` to request data.\n"
+    },
+    "doc_file_shas": {
+      "README.md": "sha-readme-101"
+    }
+  },
+  "expectation": {
+    "expected_outcomes": ["commented"],
+    "expected_doc_paths": ["README.md"],
+    "expect_doc_patch": true
+  }
+}

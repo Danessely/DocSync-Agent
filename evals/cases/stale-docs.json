@@ -1,0 +1,38 @@
+{
+  "name": "stale-docs",
+  "scenario": "stale_docs",
+  "tags": ["stale", "readme"],
+  "event_payload": {
+    "action": "opened",
+    "repository": {"full_name": "acme/project"},
+    "pull_request": {"number": 106, "head": {"sha": "head106"}}
+  },
+  "pr_snapshot": {
+    "repo": "acme/project",
+    "pr_number": 106,
+    "title": "Update defaults for client behavior",
+    "body": "Docs still describe the old default.",
+    "base_sha": "base106",
+    "head_sha": "head106",
+    "head_ref": "feature/stale-docs",
+    "changed_files": [
+      {
+        "path": "src/client.py",
+        "status": "modified",
+        "patch": "@@\n-DEFAULT_TIMEOUT = 10\n+DEFAULT_TIMEOUT = 30\n"
+      }
+    ],
+    "diff_text": "diff --git a/src/client.py b/src/client.py\n@@\n-DEFAULT_TIMEOUT = 10\n+DEFAULT_TIMEOUT = 30\n",
+    "doc_files": {
+      "README.md": "# Project\n\n## Defaults\n\nThe default timeout is 10 seconds.\n"
+    },
+    "doc_file_shas": {
+      "README.md": "sha-readme-106"
+    }
+  },
+  "expectation": {
+    "expected_outcomes": ["commented"],
+    "expected_doc_paths": ["README.md"],
+    "expect_doc_patch": true
+  }
+}

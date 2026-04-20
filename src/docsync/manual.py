@@ -100,8 +100,21 @@ def run_snapshot(
     settings: Settings | None = None,
     llm_client=None,
 ) -> tuple[dict[str, Any], list[str]]:
-    settings = settings or Settings.from_env()
     bundle = load_snapshot_bundle(snapshot_path)
+    result, github_client = run_snapshot_bundle(
+        bundle,
+        settings=settings,
+        llm_client=llm_client,
+    )
+    return result, github_client.published_comments
+
+
+def run_snapshot_bundle(
+    bundle: SnapshotBundle,
+    settings: Settings | None = None,
+    llm_client=None,
+) -> tuple[dict[str, Any], SnapshotGitHubClient]:
+    settings = settings or Settings.from_env()
     github_client = SnapshotGitHubClient(bundle.pr_snapshot)
     llm_client = llm_client or _build_llm_client(settings)
     telegram_client = _build_telegram_client(settings)
@@ -113,7 +126,7 @@ def run_snapshot(
         state_store=InMemorySessionStore(),
     )
     result = workflow.run_once(bundle.event_payload)
-    return result, github_client.published_comments
+    return result, github_client
 
 
 def _build_parser() -> argparse.ArgumentParser:

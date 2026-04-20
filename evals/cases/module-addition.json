@@ -1,0 +1,38 @@
+{
+  "name": "module-addition",
+  "scenario": "module_addition",
+  "tags": ["module", "usage"],
+  "event_payload": {
+    "action": "opened",
+    "repository": {"full_name": "acme/project"},
+    "pull_request": {"number": 103, "head": {"sha": "head103"}}
+  },
+  "pr_snapshot": {
+    "repo": "acme/project",
+    "pr_number": 103,
+    "title": "Add sync scheduler module",
+    "body": "Introduce a new scheduler entrypoint.",
+    "base_sha": "base103",
+    "head_sha": "head103",
+    "head_ref": "feature/scheduler",
+    "changed_files": [
+      {
+        "path": "src/scheduler.py",
+        "status": "added",
+        "patch": "@@\n+class Scheduler:\n+    pass\n"
+      }
+    ],
+    "diff_text": "diff --git a/src/scheduler.py b/src/scheduler.py\n@@\n+class Scheduler:\n+    pass\n",
+    "doc_files": {
+      "docs/usage.md": "# Usage\n\n## Usage\n\nRun the scheduler from the CLI.\n"
+    },
+    "doc_file_shas": {
+      "docs/usage.md": "sha-usage-103"
+    }
+  },
+  "expectation": {
+    "expected_outcomes": ["commented"],
+    "expected_doc_paths": ["docs/usage.md"],
+    "expect_doc_patch": true
+  }
+}

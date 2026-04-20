@@ -1,0 +1,38 @@
+{
+  "name": "cli-change",
+  "scenario": "cli_change",
+  "tags": ["cli", "usage"],
+  "event_payload": {
+    "action": "opened",
+    "repository": {"full_name": "acme/project"},
+    "pull_request": {"number": 104, "head": {"sha": "head104"}}
+  },
+  "pr_snapshot": {
+    "repo": "acme/project",
+    "pr_number": 104,
+    "title": "Add CLI timeout flag",
+    "body": "New CLI option for timeout control.",
+    "base_sha": "base104",
+    "head_sha": "head104",
+    "head_ref": "feature/cli-timeout",
+    "changed_files": [
+      {
+        "path": "src/cli.py",
+        "status": "modified",
+        "patch": "@@\n+parser.add_argument(\"--timeout\")\n"
+      }
+    ],
+    "diff_text": "diff --git a/src/cli.py b/src/cli.py\n@@\n+parser.add_argument(\"--timeout\")\n",
+    "doc_files": {
+      "docs/cli.md": "# CLI\n\n## Usage\n\nRun the command from a terminal.\n"
+    },
+    "doc_file_shas": {
+      "docs/cli.md": "sha-cli-104"
+    }
+  },
+  "expectation": {
+    "expected_outcomes": ["commented"],
+    "expected_doc_paths": ["docs/cli.md"],
+    "expect_doc_patch": true
+  }
+}
