@@ -6,8 +6,18 @@ from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
 from ..config import Settings
-from ..models import GenerationDecision, GenerationInput
+from ..models import (
+    ChangeAnalysis,
+    ChangeIntent,
+    GenerationDecision,
+    GenerationInput,
+    PullRequestSnapshot,
+    RetrievedContext,
+    RetrievedContextSelectionResult,
+)
+from ..prompts.analyze import build_messages as build_analysis_messages
 from ..prompts.generate import build_messages
+from ..prompts.retrieve import build_messages as build_retrieval_messages
 
 
 class LLMError(RuntimeError):
@@ -15,6 +25,13 @@ class LLMError(RuntimeError):
 
 
 class LLMClient(Protocol):
+    def analyze_change(self, snapshot: PullRequestSnapshot) -> ChangeIntent: ...
+    def select_retrieved_contexts(
+        self,
+        intent: ChangeIntent,
+        candidates: list[RetrievedContext],
+        max_candidates: int,
+    ) -> list[RetrievedContext]: ...
     def generate_decision(self, payload: GenerationInput) -> GenerationDecision: ...
 
 
@@ -44,22 +61,79 @@ class ChatOpenAILLMClient:
             model_kwargs={"response_format": {"type": "json_object"}},
         )
 
+    def analyze_change(self, snapshot: PullRequestSnapshot) -> ChangeIntent:
+        snapshot = PullRequestSnapshot.model_validate(snapshot)
+        response = self._request_model(
+            build_analysis_messages(snapshot),
+            ChangeAnalysis,
+        )
+        return ChangeIntent(
+            supported=response.supported,
+            scenario=response.scenario,
+            confidence=response.confidence,
+            summary=response.summary,
+            reason=response.reason,
+            diff_excerpt="",
+            symbol_hints=response.symbol_hints,
+            path_hints=response.path_hints,
+            documentation_hints=response.documentation_hints,
+        )
+
+    def select_retrieved_contexts(
+        self,
+        intent: ChangeIntent,
+        candidates: list[RetrievedContext],
+        max_candidates: int,
+    ) -> list[RetrievedContext]:
+        if not candidates:
+            return []
+
+        result = self._request_model(
+            build_retrieval_messages(intent, candidates, max_candidates),
+            RetrievedContextSelectionResult,
+        )
+        lookup = {(item.doc_path, item.section_title): item for item in candidates}
+        selected: list[RetrievedContext] = []
+        seen: set[tuple[str, str]] = set()
+        for item in result.selections:
+            key = (item.doc_path, item.section_title)
+            candidate = lookup.get(key)
+            if candidate is None or key in seen:
+                continue
+            seen.add(key)
+            selected.append(
+                candidate.model_copy(
+                    update={
+                        "score": item.score,
+                        "selection_reason": item.selection_reason,
+                    }
+                )
+            )
+            if len(selected) >= max_candidates:
+                break
+        return selected
+
     def generate_decision(self, payload: GenerationInput) -> GenerationDecision:
         payload = GenerationInput.model_validate(payload)
-        messages = build_messages(payload)
+        return self._request_model(build_messages(payload), GenerationDecision)
+
+    def _request_model(self, messages: list[dict[str, str]], response_model: type[Any]) -> Any:
         content = self._request_completion(messages)
         try:
-            return GenerationDecision.model_validate_json(_strip_code_fences(content))
+            return response_model.model_validate_json(_strip_code_fences(content))
         except ValidationError:
             repair_messages = messages + [
                 {
                     "role": "user",
-                    "content": "Your previous response did not match the required JSON schema. Return valid JSON only.",
+                    "content": (
+                        "Your previous response did not match the required JSON schema. "
+                        "Return valid JSON only."
+                    ),
                 }
             ]
             repaired = self._request_completion(repair_messages)
             try:
-                return GenerationDecision.model_validate_json(_strip_code_fences(repaired))
+                return response_model.model_validate_json(_strip_code_fences(repaired))
             except ValidationError as exc:
                 raise LLMError("invalid_schema") from exc
 
@@ -96,6 +170,32 @@ def _extract_content_text(message: Any) -> str:
 
 
 class MockLLMClient:
+    def analyze_change(self, snapshot: PullRequestSnapshot) -> ChangeIntent:
+        changed_paths = [item.path for item in snapshot.changed_files]
+        source_paths = [path for path in changed_paths if not path.endswith(".md")]
+        return ChangeIntent(
+            supported=bool(source_paths),
+            scenario="mock_analysis" if source_paths else "docs_only",
+            confidence=0.65 if source_paths else 0.95,
+            summary="Mock analysis detected code changes that may require docs updates."
+            if source_paths
+            else "PR changes documentation only.",
+            reason="mock_analysis",
+            diff_excerpt="",
+            symbol_hints=[],
+            path_hints=changed_paths,
+            documentation_hints=["usage", "configuration"] if source_paths else [],
+        )
+
+    def select_retrieved_contexts(
+        self,
+        intent: ChangeIntent,
+        candidates: list[RetrievedContext],
+        max_candidates: int,
+    ) -> list[RetrievedContext]:
+        del intent
+        return candidates[:max_candidates]
+
     def generate_decision(self, payload: GenerationInput) -> GenerationDecision:
         if not payload.retrieved_contexts:
             return GenerationDecision(

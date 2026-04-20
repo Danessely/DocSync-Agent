@@ -18,6 +18,19 @@ from .state import PRSessionState
 LOGGER = logging.getLogger(__name__)
 
 
+def _build_diff_summary(intent) -> str:
+    hint_lines = []
+    if intent.symbol_hints:
+        hint_lines.append(f"Symbol hints: {', '.join(intent.symbol_hints)}")
+    if intent.documentation_hints:
+        hint_lines.append(f"Documentation hints: {', '.join(intent.documentation_hints)}")
+    if intent.path_hints:
+        hint_lines.append(f"Changed paths: {', '.join(intent.path_hints)}")
+    if intent.diff_excerpt:
+        hint_lines.append(f"Diff excerpt:\n{intent.diff_excerpt}")
+    return "\n\n".join([intent.summary, *hint_lines]).strip()
+
+
 class WorkflowNodes:
     def __init__(
         self,
@@ -25,11 +38,13 @@ class WorkflowNodes:
         github_client,
         llm_client,
         telegram_client=None,
+        state_store=None,
     ) -> None:
         self._settings = settings
         self._github = github_client
         self._llm = llm_client
         self._telegram = telegram_client
+        self._state_store = state_store
         self._patch_builder = PatchBuilder()
         self._validator = PatchValidator(settings)
 
@@ -64,7 +79,7 @@ class WorkflowNodes:
     @traceable(run_type="tool", name="analyze_diff")
     def analyze_diff(self, state: PRSessionState) -> PRSessionState:
         snapshot = state["pr_snapshot"]
-        intent = analyze_pull_request(snapshot, self._settings.max_diff_lines)
+        intent = analyze_pull_request(snapshot, self._settings.max_diff_lines, llm_client=self._llm)
         outcome = "analysis_complete" if intent.supported else "fallback_comment"
         return {"stage": "analyze_diff", "change_intent": intent, "outcome": outcome}
 
@@ -72,7 +87,12 @@ class WorkflowNodes:
     def retrieve_docs(self, state: PRSessionState) -> PRSessionState:
         snapshot = state["pr_snapshot"]
         intent = state["change_intent"]
-        results = retrieve_context(snapshot.doc_files, intent, self._settings.max_doc_candidates)
+        results = retrieve_context(
+            snapshot.doc_files,
+            intent,
+            self._settings.max_doc_candidates,
+            llm_client=self._llm,
+        )
         return {"stage": "retrieve_docs", "retrieval_result": results}
 
     @traceable(run_type="tool", name="build_context")
@@ -91,7 +111,7 @@ class WorkflowNodes:
         generation_input = GenerationInput(
             policy="Only propose safe Markdown documentation edits to allowlisted files.",
             pr_card=pr_card,
-            diff_summary=intent.summary,
+            diff_summary=_build_diff_summary(intent),
             retrieved_contexts=retrieved,
             allowed_doc_paths=[item.doc_path for item in retrieved],
         )
@@ -163,6 +183,7 @@ class WorkflowNodes:
             }
 
         if self._settings.dry_run:
+            self._save_pending_clarification(state, question)
             return {
                 "stage": "clarify",
                 "clarification_result": {
@@ -182,6 +203,7 @@ class WorkflowNodes:
                 "error_code": "telegram_not_configured",
             }
 
+        self._save_pending_clarification(state, question)
         clarification_result = ClarificationResult.model_validate(
             self._telegram.send_message(question)
         ).model_dump()
@@ -261,6 +283,8 @@ class WorkflowNodes:
 
         return dedent(
             f"""
+            Session ID: {state.get("session_id", "unknown")}
+
             DocSync needs clarification for PR #{snapshot.pr_number if snapshot else "unknown"} in {snapshot.repo if snapshot else "unknown"}.
             Change scenario: {intent.scenario if intent else "unknown"}.
             Reason: {reason}
@@ -268,3 +292,12 @@ class WorkflowNodes:
             Please confirm the intended documentation update or describe the expected behavior change.
             """
         ).strip()
+
+    def _save_pending_clarification(self, state: PRSessionState, question: str) -> None:
+        if self._state_store is None or "session_id" not in state:
+            return
+        self._state_store.save_pending_clarification(
+            state["session_id"],
+            state,
+            metadata={"question": question},
+        )

@@ -8,9 +8,11 @@ from fastapi import FastAPI, HTTPException, Request
 
 from .adapters.github import GitHubApiClient
 from .adapters.llm import ChatOpenAILLMClient, MockLLMClient
-from .adapters.telegram import TelegramBotClient
+from .adapters.telegram import TelegramBotClient, extract_session_id
 from .config import Settings
 from .graph.workflow import DocSyncWorkflow
+from .models import TelegramReply
+from .state_store import InMemorySessionStore
 
 
 def _build_llm_client(settings: Settings):
@@ -34,6 +36,7 @@ def create_app(
     github_client=None,
     llm_client=None,
     telegram_client=None,
+    state_store=None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -45,13 +48,21 @@ def create_app(
     )
     llm_client = llm_client or _build_llm_client(settings)
     telegram_client = telegram_client or _build_telegram_client(settings)
-    workflow = DocSyncWorkflow(settings, github_client, llm_client, telegram_client=telegram_client)
+    state_store = state_store or InMemorySessionStore()
+    workflow = DocSyncWorkflow(
+        settings,
+        github_client,
+        llm_client,
+        telegram_client=telegram_client,
+        state_store=state_store,
+    )
 
     app = FastAPI(title="DocSync Agent")
     app.state.settings = settings
     app.state.workflow = workflow
     app.state.github_client = github_client
     app.state.telegram_client = telegram_client
+    app.state.state_store = state_store
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -69,6 +80,33 @@ def create_app(
         return {
             "status": result.get("outcome", "unknown"),
             "stage": result.get("stage", "unknown"),
+            "error_code": result.get("error_code"),
+        }
+
+    @app.post("/webhooks/telegram")
+    async def telegram_webhook(request: Request) -> dict:
+        if app.state.telegram_client is None:
+            raise HTTPException(status_code=503, detail="telegram_not_configured")
+
+        payload = json.loads(await request.body())
+        parsed_reply = app.state.telegram_client.parse_reply(payload)
+        reply = TelegramReply.model_validate(parsed_reply) if parsed_reply is not None else None
+        if reply is None:
+            return {"status": "ignored", "reason": "unsupported_update"}
+
+        session_id = extract_session_id(reply)
+        if session_id is None:
+            return {"status": "ignored", "reason": "missing_session_id"}
+
+        try:
+            result = workflow.resume_from_clarification(session_id, reply.text)
+        except KeyError:
+            return {"status": "ignored", "reason": "unknown_session"}
+
+        return {
+            "status": result.get("outcome", "unknown"),
+            "stage": result.get("stage", "unknown"),
+            "session_id": session_id,
             "error_code": result.get("error_code"),
         }
 

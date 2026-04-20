@@ -12,6 +12,7 @@ from .adapters.telegram import TelegramBotClient
 from .config import Settings
 from .graph.workflow import DocSyncWorkflow
 from .models import PublishResult, PullRequestSnapshot
+from .state_store import InMemorySessionStore
 
 
 class SnapshotBundle(BaseModel):
@@ -99,7 +100,13 @@ def run_snapshot(
     github_client = SnapshotGitHubClient(bundle.pr_snapshot)
     llm_client = llm_client or _build_llm_client(settings)
     telegram_client = _build_telegram_client(settings)
-    workflow = DocSyncWorkflow(settings, github_client, llm_client, telegram_client=telegram_client)
+    workflow = DocSyncWorkflow(
+        settings,
+        github_client,
+        llm_client,
+        telegram_client=telegram_client,
+        state_store=InMemorySessionStore(),
+    )
     result = workflow.run_once(bundle.event_payload)
     return result, github_client.published_comments
 

@@ -34,6 +34,18 @@ class ChangeIntent(BaseModel):
     diff_excerpt: str
     symbol_hints: list[str] = Field(default_factory=list)
     path_hints: list[str] = Field(default_factory=list)
+    documentation_hints: list[str] = Field(default_factory=list)
+
+
+class ChangeAnalysis(BaseModel):
+    supported: bool
+    scenario: str
+    confidence: float
+    summary: str
+    reason: str
+    symbol_hints: list[str] = Field(default_factory=list)
+    path_hints: list[str] = Field(default_factory=list)
+    documentation_hints: list[str] = Field(default_factory=list)
 
 
 class RetrievedContext(BaseModel):
@@ -44,12 +56,24 @@ class RetrievedContext(BaseModel):
     selection_reason: str
 
 
+class RetrievedContextSelection(BaseModel):
+    doc_path: str
+    section_title: str
+    score: float
+    selection_reason: str
+
+
+class RetrievedContextSelectionResult(BaseModel):
+    selections: list[RetrievedContextSelection] = Field(default_factory=list)
+
+
 class GenerationInput(BaseModel):
     policy: str
     pr_card: str
     diff_summary: str
     retrieved_contexts: list[RetrievedContext] = Field(default_factory=list)
     allowed_doc_paths: list[str] = Field(default_factory=list)
+    human_clarification: str = ""
 
 
 class ProposedDocChange(BaseModel):
@@ -103,3 +127,10 @@ class ClarificationResult(BaseModel):
     sent: bool
     message: str
     error: str | None = None
+
+
+class TelegramReply(BaseModel):
+    chat_id: str
+    text: str
+    message_id: int | None = None
+    reply_to_text: str = ""

@@ -32,6 +32,9 @@ def build_messages(payload: GenerationInput) -> list[dict[str, str]]:
         Retrieved doc contexts:
         {payload.retrieved_contexts}
 
+        Human clarification:
+        {payload.human_clarification or "(none)"}
+
         Produce the minimum safe documentation update.
         """
     ).strip()
@@ -39,4 +42,3 @@ def build_messages(payload: GenerationInput) -> list[dict[str, str]]:
         {"role": "system", "content": SYSTEM_POLICY},
         {"role": "user", "content": user_prompt},
     ]
-

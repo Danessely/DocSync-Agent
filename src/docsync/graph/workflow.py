@@ -20,10 +20,24 @@ LOGGER = logging.getLogger(__name__)
 
 
 class DocSyncWorkflow:
-    def __init__(self, settings: Settings, github_client, llm_client, telegram_client=None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        github_client,
+        llm_client,
+        telegram_client=None,
+        state_store=None,
+    ) -> None:
         self._settings = settings
-        self._nodes = WorkflowNodes(settings, github_client, llm_client, telegram_client=telegram_client)
+        self._nodes = WorkflowNodes(
+            settings,
+            github_client,
+            llm_client,
+            telegram_client=telegram_client,
+            state_store=state_store,
+        )
         self._graph = self._build_graph()
+        self._state_store = state_store
 
     def _build_graph(self):
         graph = StateGraph(PRSessionState)
@@ -119,5 +133,52 @@ class DocSyncWorkflow:
             return state
         if route_after_validate(state) == "publish":
             state.update(self._nodes.publish(state))
+        state.update(self._nodes.complete(state))
+        return state
+
+    @traceable(run_type="chain", name="docsync_resume_from_clarification")
+    def resume_from_clarification(self, session_id: str, reply_text: str) -> PRSessionState:
+        if self._state_store is None:
+            raise RuntimeError("state_store_not_configured")
+
+        pending = self._state_store.get_pending_clarification(session_id)
+        if pending is None:
+            raise KeyError(f"unknown_session:{session_id}")
+
+        state = pending.state
+        generation_input = state.get("generation_input")
+        if generation_input is None:
+            state.update(self._nodes.build_context(state))
+            generation_input = state["generation_input"]
+
+        state["generation_input"] = generation_input.model_copy(update={"human_clarification": reply_text})
+        state.pop("clarification_result", None)
+        state.pop("publish_result", None)
+        state.pop("validation_report", None)
+        state.pop("doc_patch", None)
+        state.pop("outcome", None)
+        state.pop("error_code", None)
+
+        state.update(self._nodes.generate(state))
+        next_step = route_after_generate(state)
+        if next_step == "clarify":
+            state.update(self._nodes.clarify(state))
+            state.update(self._nodes.complete(state))
+            return state
+        if next_step == "publish":
+            state.update(self._nodes.publish(state))
+            self._state_store.clear_pending_clarification(session_id)
+            state.update(self._nodes.complete(state))
+            return state
+
+        state.update(self._nodes.build_patch(state))
+        state.update(self._nodes.validate(state))
+        if route_after_validate(state) == "clarify":
+            state.update(self._nodes.clarify(state))
+            state.update(self._nodes.complete(state))
+            return state
+        if route_after_validate(state) == "publish":
+            state.update(self._nodes.publish(state))
+            self._state_store.clear_pending_clarification(session_id)
         state.update(self._nodes.complete(state))
         return state

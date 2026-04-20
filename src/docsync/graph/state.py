@@ -23,6 +23,7 @@ class PRSessionState(TypedDict, total=False):
     repo: str
     pr_number: int
     head_sha: str
+    min_confidence: float
     stage: str
     pr_snapshot: PullRequestSnapshot
     change_intent: ChangeIntent

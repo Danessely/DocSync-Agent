@@ -10,6 +10,7 @@ import pytest
 from docsync.config import Settings
 from docsync.main import create_app
 from docsync.models import ChangedFile, GenerationDecision, PublishResult, PullRequestSnapshot
+from docsync.state_store import InMemorySessionStore
 
 
 class FakeGitHubClient:
@@ -65,6 +66,55 @@ class FakeLLMClient:
                 }
             ],
         )
+
+
+class ClarificationAwareLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate_decision(self, payload):
+        self.calls += 1
+        if not getattr(payload, "human_clarification", ""):
+            return GenerationDecision(
+                decision="ask_human",
+                confidence=0.2,
+                comment="Need clarification.",
+                proposed_changes=[],
+            )
+        return GenerationDecision(
+            decision="update",
+            confidence=0.95,
+            comment="Clarified update.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": f"- {payload.human_clarification}",
+                    "rationale": "reply",
+                }
+            ],
+        )
+
+
+class FakeTelegramClient:
+    def __init__(self) -> None:
+        self.sent_messages: list[str] = []
+
+    def send_message(self, text: str):
+        self.sent_messages.append(text)
+        return {"channel": "telegram", "sent": True, "message": text}
+
+    def parse_reply(self, payload):
+        message = payload.get("message") or {}
+        if "text" not in message:
+            return None
+        return {
+            "chat_id": str((message.get("chat") or {}).get("id")),
+            "text": message["text"],
+            "message_id": message.get("message_id"),
+            "reply_to_text": ((message.get("reply_to_message") or {}).get("text")) or "",
+        }
 
 
 def make_snapshot() -> PullRequestSnapshot:
@@ -173,3 +223,46 @@ async def test_github_webhook_ignores_unsupported_action() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
+
+
+@pytest.mark.anyio
+async def test_telegram_webhook_resumes_pending_clarification() -> None:
+    secret = "topsecret"
+    snapshot = make_snapshot()
+    telegram = FakeTelegramClient()
+    llm = ClarificationAwareLLMClient()
+    store = InMemorySessionStore()
+    app = create_app(
+        settings=Settings(github_webhook_secret=secret, dry_run=False),
+        github_client=FakeGitHubClient(snapshot, secret),
+        llm_client=llm,
+        telegram_client=telegram,
+        state_store=store,
+    )
+
+    github_payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/project"},
+        "pull_request": {"number": 9, "head": {"sha": "sha123"}},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        initial = await signed_json_request(client, secret, github_payload)
+        assert initial.status_code == 200
+        assert initial.json()["status"] == "asked_human"
+        assert telegram.sent_messages
+        outbound = telegram.sent_messages[0]
+
+        telegram_reply = {
+            "message": {
+                "message_id": 55,
+                "chat": {"id": "chat-1"},
+                "text": "Please mention the timeout parameter in README.",
+                "reply_to_message": {"text": outbound},
+            }
+        }
+        resumed = await client.post("/webhooks/telegram", json=telegram_reply)
+
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "commented"
