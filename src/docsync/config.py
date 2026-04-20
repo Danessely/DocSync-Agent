@@ -55,6 +55,8 @@ class Settings(BaseModel):
     session_store_path: str = ".docsync/session_store.json"
     docs_validation_command: str = ""
     docs_validation_timeout_sec: int = 30
+    github_max_retries: int = 2
+    github_backoff_base_sec: float = 0.5
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -85,5 +87,7 @@ class Settings(BaseModel):
             "session_store_path": os.getenv("SESSION_STORE_PATH", ".docsync/session_store.json"),
             "docs_validation_command": os.getenv("DOCS_VALIDATION_COMMAND", ""),
             "docs_validation_timeout_sec": int(os.getenv("DOCS_VALIDATION_TIMEOUT_SEC", "30")),
+            "github_max_retries": int(os.getenv("GITHUB_MAX_RETRIES", "2")),
+            "github_backoff_base_sec": float(os.getenv("GITHUB_BACKOFF_BASE_SEC", "0.5")),
         }
         return cls(**values)

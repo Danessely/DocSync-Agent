@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from docsync.adapters.github import GitHubError
 from docsync.adapters.llm import ChatOpenAILLMClient
 from docsync.config import Settings
 from docsync.graph.workflow import DocSyncWorkflow
@@ -10,11 +11,17 @@ from docsync.state_store import InMemorySessionStore
 
 
 class FakeGitHubClient:
-    def __init__(self, snapshot: PullRequestSnapshot, markdown_only_updates: set[tuple[str, str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        snapshot: PullRequestSnapshot,
+        markdown_only_updates: set[tuple[str, str, str]] | None = None,
+        publish_error: GitHubError | None = None,
+    ) -> None:
         self.snapshot = snapshot
         self.published_bodies: list[str] = []
         self.published_patches: list[dict[str, object]] = []
         self.markdown_only_updates = markdown_only_updates or set()
+        self.publish_error = publish_error
 
     def verify_webhook_signature(self, body: bytes, signature: str | None) -> bool:
         return True
@@ -38,6 +45,8 @@ class FakeGitHubClient:
         return self.snapshot
 
     def publish_comment(self, repo: str, pr_number: int, body: str) -> PublishResult:
+        if self.publish_error is not None:
+            raise self.publish_error
         self.published_bodies.append(body)
         return PublishResult(mode="comment_only", published=True, comment_body=body, comment_id=1)
 
@@ -48,6 +57,8 @@ class FakeGitHubClient:
         session_id: str,
         summary: str,
     ) -> PublishResult:
+        if self.publish_error is not None:
+            raise self.publish_error
         self.published_patches.append(
             {
                 "repo": snapshot.repo,
@@ -388,6 +399,38 @@ def test_processed_head_is_deduplicated() -> None:
     assert second["outcome"] == "ignored"
     assert second["error_code"] == "duplicate_head_sha"
     assert llm.calls == 1
+
+
+def test_publish_failure_returns_failed_publish_state() -> None:
+    snapshot = make_snapshot()
+    github = FakeGitHubClient(
+        snapshot,
+        publish_error=GitHubError("auth_error", "denied", status_code=403),
+    )
+    llm = StubLLMClient(
+        GenerationDecision(
+            decision="update",
+            confidence=0.92,
+            comment="Document the new timeout parameter.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": "- `timeout` controls request timeout in seconds.",
+                    "rationale": "The API signature changed.",
+                }
+            ],
+        )
+    )
+    workflow = DocSyncWorkflow(make_settings(), github, llm)
+
+    result = workflow.run_once(make_payload())
+
+    assert result["outcome"] == "failed_publish"
+    assert result["error_code"] == "publish_auth_error"
+    assert result["publish_result"]["published"] is False
+    assert "auth_error" in result["publish_result"]["error"]
 
 
 def test_llm_analysis_supports_non_obvious_change() -> None:

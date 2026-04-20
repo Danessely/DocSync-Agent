@@ -1,0 +1,19 @@
+{
+  "pending": {},
+  "processed_heads": {
+    "Danessely/docsync-test#4:bf9e93d7050855fb504c6ffe3dae041351da0acd": {
+      "head_sha": "bf9e93d7050855fb504c6ffe3dae041351da0acd",
+      "outcome": "patched",
+      "pr_number": 4,
+      "repo": "Danessely/docsync-test",
+      "session_id": "bdb3981701f9f05b"
+    },
+    "Danessely/docsync-test#4:ee75a34004fd53b1d9966ac7f69e05363d7d45d7": {
+      "head_sha": "ee75a34004fd53b1d9966ac7f69e05363d7d45d7",
+      "outcome": "ignored",
+      "pr_number": 4,
+      "repo": "Danessely/docsync-test",
+      "session_id": "35d3d75b5bf09670"
+    }
+  }
+}

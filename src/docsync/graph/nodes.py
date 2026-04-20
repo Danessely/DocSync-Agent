@@ -8,8 +8,9 @@ from textwrap import dedent
 from langsmith import traceable
 
 from ..analysis import analyze_pull_request
+from ..adapters.github import GitHubError
 from ..config import Settings
-from ..models import ClarificationResult, DocPatch, GenerationInput
+from ..models import ClarificationResult, DocPatch, GenerationInput, PublishResult
 from ..patching.builder import PatchBuilder
 from ..retrieval.search import retrieve_context
 from ..validation.validator import PatchValidator
@@ -190,17 +191,22 @@ class WorkflowNodes:
         if self._settings.dry_run:
             mode = "commit_patch" if self._should_commit_patch(state) else "comment_only"
             publish_result = {"mode": mode, "published": False, "comment_body": body}
-        elif self._should_commit_patch(state):
-            patch = state["doc_patch"]
-            summary = state.get("llm_decision").comment if state.get("llm_decision") else patch.summary
-            publish_result = self._github.publish_patch(
-                snapshot,
-                patch,
-                state["session_id"],
-                summary,
-            ).model_dump()
         else:
-            publish_result = self._github.publish_comment(snapshot.repo, snapshot.pr_number, body).model_dump()
+            try:
+                if self._should_commit_patch(state):
+                    patch = state["doc_patch"]
+                    summary = state.get("llm_decision").comment if state.get("llm_decision") else patch.summary
+                    publish_result = self._github.publish_patch(
+                        snapshot,
+                        patch,
+                        state["session_id"],
+                        summary,
+                    ).model_dump()
+                else:
+                    publish_result = self._github.publish_comment(snapshot.repo, snapshot.pr_number, body).model_dump()
+            except GitHubError as exc:
+                mode = "commit_patch" if self._should_commit_patch(state) else "comment_only"
+                return self._publish_failure_state(mode, exc)
         if publish_result["mode"] == "commit_patch" and (publish_result["published"] or self._settings.dry_run):
             outcome = "patched"
         elif publish_result["comment_body"]:
@@ -233,7 +239,10 @@ class WorkflowNodes:
             }
 
         if self._telegram is None:
-            publish_result = self._github.publish_comment(snapshot.repo, snapshot.pr_number, question).model_dump()
+            try:
+                publish_result = self._github.publish_comment(snapshot.repo, snapshot.pr_number, question).model_dump()
+            except GitHubError as exc:
+                return self._publish_failure_state("comment_only", exc)
             return {
                 "stage": "clarify",
                 "publish_result": publish_result,
@@ -340,6 +349,21 @@ class WorkflowNodes:
             state,
             metadata={"question": question},
         )
+
+    def _publish_failure_state(self, mode: str, exc: GitHubError) -> PRSessionState:
+        publish_result = PublishResult(
+            mode=mode,
+            published=False,
+            comment_body="",
+            error=str(exc),
+            details=exc.message,
+        ).model_dump()
+        return {
+            "stage": "publish",
+            "publish_result": publish_result,
+            "outcome": "failed_publish",
+            "error_code": f"publish_{exc.code}",
+        }
 
     def _record_processed_head(self, state: PRSessionState) -> None:
         if self._state_store is None:

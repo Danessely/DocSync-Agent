@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import time
+from collections.abc import Callable
 from typing import Any, Protocol
 from urllib.parse import quote
 
@@ -13,6 +15,20 @@ from ..models import ChangedFile, DocPatch, PublishResult, PullRequestSnapshot
 
 class GitHubError(RuntimeError):
     """Raised for GitHub API failures."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int | None = None,
+        transient: bool = False,
+    ) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.transient = transient
 
 
 class GitHubClient(Protocol):
@@ -39,10 +55,16 @@ class GitHubApiClient:
         base_url: str = "https://api.github.com",
         timeout: float = 10.0,
         transport: httpx.BaseTransport | None = None,
+        max_retries: int = 2,
+        backoff_base_sec: float = 0.5,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         self._token = token
         self._webhook_secret = webhook_secret
         self._doc_allowlist = doc_allowlist
+        self._max_retries = max(0, max_retries)
+        self._backoff_base_sec = max(0.0, backoff_base_sec)
+        self._sleep = sleep_fn or time.sleep
         self._default_headers = {
             "Accept": "application/vnd.github+json",
             "User-Agent": "docsync-agent",
@@ -100,10 +122,36 @@ class GitHubApiClient:
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         request_headers = dict(self._default_headers)
         request_headers.update(kwargs.pop("headers", {}))
-        response = self._client.request(method, path, headers=request_headers, **kwargs)
-        if response.status_code >= 400:
-            raise GitHubError(f"github_http_{response.status_code}: {response.text}")
-        return response
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._client.request(method, path, headers=request_headers, **kwargs)
+            except httpx.RequestError as exc:
+                error = GitHubError("transient_http_error", str(exc), transient=True)
+                if attempt < self._max_retries:
+                    self._sleep(self._retry_delay(attempt))
+                    continue
+                raise error from exc
+
+            if response.status_code < 400:
+                return response
+
+            error = _classify_response_error(response)
+            if error.transient and attempt < self._max_retries:
+                self._sleep(self._retry_delay(attempt, response))
+                continue
+            raise error
+
+        raise GitHubError("transient_http_error", "unreachable_retry_state", transient=True)
+
+    def _retry_delay(self, attempt: int, response: httpx.Response | None = None) -> float:
+        if response is not None:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return max(0.0, float(retry_after))
+                except ValueError:
+                    pass
+        return self._backoff_base_sec * (2**attempt)
 
     def load_pull_request(self, repo: str, pr_number: int) -> PullRequestSnapshot:
         pr_resp = self._request("GET", f"/repos/{repo}/pulls/{pr_number}")
@@ -248,3 +296,19 @@ class GitHubApiClient:
 
 def _is_markdown_path(path: str) -> bool:
     return path.lower().endswith(".md")
+
+
+def _classify_response_error(response: httpx.Response) -> GitHubError:
+    status = response.status_code
+    body = response.text
+    if status in {401, 403}:
+        return GitHubError("auth_error", body, status_code=status)
+    if status == 404:
+        return GitHubError("not_found", body, status_code=status)
+    if status == 409:
+        return GitHubError("conflict", body, status_code=status)
+    if status == 429:
+        return GitHubError("rate_limited", body, status_code=status, transient=True)
+    if 500 <= status < 600:
+        return GitHubError("transient_http_error", body, status_code=status, transient=True)
+    return GitHubError(f"github_http_{status}", body, status_code=status)

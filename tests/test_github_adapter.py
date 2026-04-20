@@ -104,3 +104,31 @@ def test_is_markdown_only_update_uses_compare_endpoint() -> None:
 
     assert result is True
     assert seen_urls == ["https://api.github.com/repos/acme/project/compare/base123...head123"]
+
+
+def test_publish_comment_retries_transient_failure_then_succeeds() -> None:
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(502, text="temporary upstream failure")
+        return httpx.Response(200, json={"id": 123})
+
+    client = GitHubApiClient(
+        token="TOKEN123",
+        webhook_secret="secret",
+        doc_allowlist=["README.md", "docs/"],
+        transport=httpx.MockTransport(handler),
+        max_retries=2,
+        backoff_base_sec=0.25,
+        sleep_fn=sleeps.append,
+    )
+
+    result = client.publish_comment("acme/project", 7, "hello")
+
+    assert result.published is True
+    assert result.comment_id == 123
+    assert calls["count"] == 2
+    assert sleeps == [0.25]

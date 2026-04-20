@@ -51,6 +51,8 @@ def create_app(
         token=settings.github_token,
         webhook_secret=settings.github_webhook_secret,
         doc_allowlist=settings.doc_path_allowlist,
+        max_retries=settings.github_max_retries,
+        backoff_base_sec=settings.github_backoff_base_sec,
     )
     llm_client = llm_client or _build_llm_client(settings)
     telegram_client = telegram_client or _build_telegram_client(settings)

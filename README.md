@@ -44,6 +44,13 @@ cp .env.sample .env
 Если указать, например, `DOCS_VALIDATION_COMMAND="mkdocs build --strict"`, тогда `mkdocs` должен быть установлен и доступен в `PATH`.
 Команда выполняется во временной директории с текущим snapshot документации и proposed patch.
 
+Для GitHub API доступны ограниченные ретраи на временных ошибках:
+
+- `GITHUB_MAX_RETRIES`
+- `GITHUB_BACKOFF_BASE_SEC`
+
+После исчерпания ретраев publish-запрос завершается состоянием `failed_publish`, а не аварийным падением пайплайна.
+
 ### Проверка тестами
 
 ```bash

@@ -16,6 +16,8 @@ def test_settings_from_env_loads_dotenv_file(tmp_path, monkeypatch) -> None:
                 "SESSION_STORE_PATH=.docsync/custom-store.json",
                 "DOCS_VALIDATION_COMMAND=mkdocs build --strict",
                 "DOCS_VALIDATION_TIMEOUT_SEC=45",
+                "GITHUB_MAX_RETRIES=3",
+                "GITHUB_BACKOFF_BASE_SEC=0.75",
             ]
         ),
         encoding="utf-8",
@@ -27,6 +29,8 @@ def test_settings_from_env_loads_dotenv_file(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("SESSION_STORE_PATH", raising=False)
     monkeypatch.delenv("DOCS_VALIDATION_COMMAND", raising=False)
     monkeypatch.delenv("DOCS_VALIDATION_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("GITHUB_MAX_RETRIES", raising=False)
+    monkeypatch.delenv("GITHUB_BACKOFF_BASE_SEC", raising=False)
 
     settings = Settings.from_env()
 
@@ -36,6 +40,8 @@ def test_settings_from_env_loads_dotenv_file(tmp_path, monkeypatch) -> None:
     assert settings.session_store_path == ".docsync/custom-store.json"
     assert settings.docs_validation_command == "mkdocs build --strict"
     assert settings.docs_validation_timeout_sec == 45
+    assert settings.github_max_retries == 3
+    assert settings.github_backoff_base_sec == 0.75
 
 
 def test_settings_from_env_does_not_override_exported_env(tmp_path, monkeypatch) -> None:
