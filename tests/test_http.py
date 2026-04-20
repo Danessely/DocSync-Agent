@@ -187,6 +187,7 @@ async def test_github_webhook_accepts_valid_signature() -> None:
         settings=Settings(github_webhook_secret=secret, dry_run=False),
         github_client=FakeGitHubClient(snapshot, secret),
         llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
     )
     payload = {
         "action": "opened",
@@ -210,6 +211,7 @@ async def test_github_webhook_rejects_bad_signature() -> None:
         settings=Settings(github_webhook_secret=secret, dry_run=False),
         github_client=FakeGitHubClient(snapshot, secret),
         llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
     )
     payload = {
         "action": "opened",
@@ -236,6 +238,7 @@ async def test_github_webhook_ignores_unsupported_action() -> None:
         settings=Settings(github_webhook_secret=secret, dry_run=False),
         github_client=FakeGitHubClient(snapshot, secret),
         llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
     )
     payload = {
         "action": "closed",
@@ -263,6 +266,7 @@ async def test_github_webhook_ignores_markdown_only_synchronize_update() -> None
             markdown_only_updates={("acme/project", "prev123", "sha123")},
         ),
         llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
     )
     payload = {
         "action": "synchronize",

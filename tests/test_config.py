@@ -13,6 +13,7 @@ def test_settings_from_env_loads_dotenv_file(tmp_path, monkeypatch) -> None:
                 "GITHUB_TOKEN=from-dotenv",
                 "LLM_PROVIDER=openai",
                 "DOC_PATH_ALLOWLIST=README.md,docs/",
+                "SESSION_STORE_PATH=.docsync/custom-store.json",
             ]
         ),
         encoding="utf-8",
@@ -21,12 +22,14 @@ def test_settings_from_env_loads_dotenv_file(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("DOC_PATH_ALLOWLIST", raising=False)
+    monkeypatch.delenv("SESSION_STORE_PATH", raising=False)
 
     settings = Settings.from_env()
 
     assert settings.github_token == "from-dotenv"
     assert settings.llm_provider == "openai"
     assert settings.doc_path_allowlist == ["README.md", "docs/"]
+    assert settings.session_store_path == ".docsync/custom-store.json"
 
 
 def test_settings_from_env_does_not_override_exported_env(tmp_path, monkeypatch) -> None:
@@ -37,4 +40,3 @@ def test_settings_from_env_does_not_override_exported_env(tmp_path, monkeypatch)
     settings = Settings.from_env()
 
     assert settings.github_token == "from-env"
-

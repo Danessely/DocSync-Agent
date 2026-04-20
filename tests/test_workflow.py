@@ -359,6 +359,37 @@ def test_synchronize_event_with_code_changes_still_runs() -> None:
     assert github.published_bodies
 
 
+def test_processed_head_is_deduplicated() -> None:
+    snapshot = make_snapshot()
+    github = FakeGitHubClient(snapshot)
+    llm = StubLLMClient(
+        GenerationDecision(
+            decision="update",
+            confidence=0.92,
+            comment="Document the new timeout parameter.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": "- `timeout` controls request timeout in seconds.",
+                    "rationale": "The API signature changed.",
+                }
+            ],
+        )
+    )
+    store = InMemorySessionStore()
+    workflow = DocSyncWorkflow(make_settings(), github, llm, state_store=store)
+
+    first = workflow.run_once(make_payload())
+    second = workflow.run_once(make_payload())
+
+    assert first["outcome"] == "commented"
+    assert second["outcome"] == "ignored"
+    assert second["error_code"] == "duplicate_head_sha"
+    assert llm.calls == 1
+
+
 def test_llm_analysis_supports_non_obvious_change() -> None:
     snapshot = PullRequestSnapshot(
         repo="acme/project",

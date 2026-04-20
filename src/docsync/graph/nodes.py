@@ -60,6 +60,24 @@ class WorkflowNodes:
         session_seed = f"{event['repo']}#{event['pr_number']}:{event['head_sha']}"
         session_id = hashlib.sha256(session_seed.encode("utf-8")).hexdigest()[:16]
         LOGGER.info("ingest", extra={"session_id": session_id, "repo": event["repo"], "pr_number": event["pr_number"]})
+        if self._state_store is not None:
+            processed = self._state_store.get_processed_head(
+                event["repo"],
+                event["pr_number"],
+                event["head_sha"],
+            )
+            if processed is not None:
+                return {
+                    "stage": "ingest",
+                    "repo": event["repo"],
+                    "pr_number": event["pr_number"],
+                    "head_sha": event["head_sha"],
+                    "event_action": event["action"],
+                    "session_id": session_id,
+                    "trace_id": session_id,
+                    "outcome": "ignored",
+                    "error_code": "duplicate_head_sha",
+                }
         if (
             event["action"] == "synchronize"
             and event.get("before_sha")
@@ -235,6 +253,7 @@ class WorkflowNodes:
 
     @traceable(run_type="tool", name="complete")
     def complete(self, state: PRSessionState) -> PRSessionState:
+        self._record_processed_head(state)
         return {"stage": "complete"}
 
     def _should_commit_patch(self, state: PRSessionState) -> bool:
@@ -320,4 +339,23 @@ class WorkflowNodes:
             state["session_id"],
             state,
             metadata={"question": question},
+        )
+
+    def _record_processed_head(self, state: PRSessionState) -> None:
+        if self._state_store is None:
+            return
+        if state.get("outcome") not in {"patched", "commented", "asked_human", "ignored"}:
+            return
+        repo = state.get("repo")
+        pr_number = state.get("pr_number")
+        head_sha = state.get("head_sha")
+        session_id = state.get("session_id")
+        if not repo or pr_number is None or not head_sha or not session_id:
+            return
+        self._state_store.mark_processed_head(
+            repo,
+            pr_number,
+            head_sha,
+            state["outcome"],
+            session_id,
         )

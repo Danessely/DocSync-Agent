@@ -52,6 +52,7 @@ class Settings(BaseModel):
     dry_run: bool = False
     min_confidence: float = 0.6
     log_level: str = "INFO"
+    session_store_path: str = ".docsync/session_store.json"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -79,5 +80,6 @@ class Settings(BaseModel):
             "dry_run": os.getenv("DRY_RUN", "false").lower() == "true",
             "min_confidence": float(os.getenv("MIN_CONFIDENCE", "0.6")),
             "log_level": os.getenv("LOG_LEVEL", "INFO"),
+            "session_store_path": os.getenv("SESSION_STORE_PATH", ".docsync/session_store.json"),
         }
         return cls(**values)

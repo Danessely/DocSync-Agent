@@ -12,7 +12,7 @@ from .adapters.telegram import TelegramBotClient, extract_session_id
 from .config import Settings
 from .graph.workflow import DocSyncWorkflow
 from .models import TelegramReply
-from .state_store import InMemorySessionStore
+from .state_store import FileSessionStore, InMemorySessionStore
 
 
 def _build_llm_client(settings: Settings):
@@ -29,6 +29,12 @@ def _build_telegram_client(settings: Settings):
         chat_id=settings.telegram_chat_id,
         timeout=settings.telegram_timeout_sec,
     )
+
+
+def _build_state_store(settings: Settings):
+    if not settings.session_store_path:
+        return InMemorySessionStore()
+    return FileSessionStore(settings.session_store_path)
 
 
 def create_app(
@@ -48,7 +54,7 @@ def create_app(
     )
     llm_client = llm_client or _build_llm_client(settings)
     telegram_client = telegram_client or _build_telegram_client(settings)
-    state_store = state_store or InMemorySessionStore()
+    state_store = state_store or _build_state_store(settings)
     workflow = DocSyncWorkflow(
         settings,
         github_client,

@@ -35,6 +35,9 @@ cp .env.sample .env
 - `comment_only` — оставить comment с patch preview
 - `commit_patch` — закоммитить doc-изменения прямо в head branch PR
 
+Локальное состояние сессий и deduplication по `head_sha` сохраняются в файл, путь задаётся через `SESSION_STORE_PATH`.
+По умолчанию используется `.docsync/session_store.json`.
+
 ### Проверка тестами
 
 ```bash
