@@ -38,6 +38,12 @@ cp .env.sample .env
 Локальное состояние сессий и deduplication по `head_sha` сохраняются в файл, путь задаётся через `SESSION_STORE_PATH`.
 По умолчанию используется `.docsync/session_store.json`.
 
+Для дополнительной технической проверки документации можно задать `DOCS_VALIDATION_COMMAND`.
+По умолчанию эта проверка выключена, и MkDocs для работы PoC не нужен.
+
+Если указать, например, `DOCS_VALIDATION_COMMAND="mkdocs build --strict"`, тогда `mkdocs` должен быть установлен и доступен в `PATH`.
+Команда выполняется во временной директории с текущим snapshot документации и proposed patch.
+
 ### Проверка тестами
 
 ```bash

@@ -53,6 +53,8 @@ class Settings(BaseModel):
     min_confidence: float = 0.6
     log_level: str = "INFO"
     session_store_path: str = ".docsync/session_store.json"
+    docs_validation_command: str = ""
+    docs_validation_timeout_sec: int = 30
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -81,5 +83,7 @@ class Settings(BaseModel):
             "min_confidence": float(os.getenv("MIN_CONFIDENCE", "0.6")),
             "log_level": os.getenv("LOG_LEVEL", "INFO"),
             "session_store_path": os.getenv("SESSION_STORE_PATH", ".docsync/session_store.json"),
+            "docs_validation_command": os.getenv("DOCS_VALIDATION_COMMAND", ""),
+            "docs_validation_timeout_sec": int(os.getenv("DOCS_VALIDATION_TIMEOUT_SEC", "30")),
         }
         return cls(**values)

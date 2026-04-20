@@ -108,6 +108,8 @@ def test_manual_main_json_output(tmp_path, capsys, monkeypatch) -> None:
     path.write_text(bundle.model_dump_json(indent=2), encoding="utf-8")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("PUBLISH_MODE", "comment_only")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
 
     exit_code = main([str(path), "--json"])
     output = capsys.readouterr().out
