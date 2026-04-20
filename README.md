@@ -51,6 +51,13 @@ cp .env.sample .env
 
 После исчерпания ретраев publish-запрос завершается состоянием `failed_publish`.
 
+Для отслеживания и тресинга запросов и работы сервиса рекомендуется подключить LangSmith:
+
+- `LANGSMITH_TRACING=true`
+- `LANGSMITH_ENDPOINT`
+- `LANGSMITH_API_KEY`
+- `LANGSMITH_PROJECT`
+
 ### Проверка тестами
 
 ```bash
