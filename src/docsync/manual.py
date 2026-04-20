@@ -41,8 +41,13 @@ class SnapshotGitHubClient:
             "repo": repo,
             "pr_number": int(pr["number"]),
             "head_sha": ((pr.get("head") or {}).get("sha") or ""),
+            "before_sha": payload.get("before") or "",
             "action": action,
         }
+
+    def is_markdown_only_update(self, repo: str, before_sha: str, head_sha: str) -> bool:
+        del repo, before_sha, head_sha
+        return False
 
     def load_pull_request(self, repo: str, pr_number: int) -> PullRequestSnapshot:
         if repo != self._snapshot.repo or pr_number != self._snapshot.pr_number:

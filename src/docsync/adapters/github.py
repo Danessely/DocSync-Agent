@@ -18,6 +18,7 @@ class GitHubError(RuntimeError):
 class GitHubClient(Protocol):
     def verify_webhook_signature(self, body: bytes, signature: str | None) -> bool: ...
     def parse_pull_request_event(self, payload: dict[str, Any]) -> dict[str, Any] | None: ...
+    def is_markdown_only_update(self, repo: str, before_sha: str, head_sha: str) -> bool: ...
     def load_pull_request(self, repo: str, pr_number: int) -> PullRequestSnapshot: ...
     def publish_comment(self, repo: str, pr_number: int, body: str) -> PublishResult: ...
     def publish_patch(
@@ -79,8 +80,22 @@ class GitHubApiClient:
             "repo": repo,
             "pr_number": int(pr["number"]),
             "head_sha": ((pr.get("head") or {}).get("sha") or ""),
+            "before_sha": payload.get("before") or "",
             "action": action,
         }
+
+    def is_markdown_only_update(self, repo: str, before_sha: str, head_sha: str) -> bool:
+        if not before_sha or not head_sha or before_sha == head_sha:
+            return False
+
+        response = self._request(
+            "GET",
+            f"/repos/{repo}/compare/{before_sha}...{head_sha}",
+        )
+        files = response.json().get("files") or []
+        if not files:
+            return False
+        return all(_is_markdown_path(item.get("filename", "")) for item in files)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         request_headers = dict(self._default_headers)
@@ -229,3 +244,7 @@ class GitHubApiClient:
             committed_files=committed_files,
             details=summary,
         )
+
+
+def _is_markdown_path(path: str) -> bool:
+    return path.lower().endswith(".md")

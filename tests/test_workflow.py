@@ -10,10 +10,11 @@ from docsync.state_store import InMemorySessionStore
 
 
 class FakeGitHubClient:
-    def __init__(self, snapshot: PullRequestSnapshot) -> None:
+    def __init__(self, snapshot: PullRequestSnapshot, markdown_only_updates: set[tuple[str, str, str]] | None = None) -> None:
         self.snapshot = snapshot
         self.published_bodies: list[str] = []
         self.published_patches: list[dict[str, object]] = []
+        self.markdown_only_updates = markdown_only_updates or set()
 
     def verify_webhook_signature(self, body: bytes, signature: str | None) -> bool:
         return True
@@ -24,8 +25,12 @@ class FakeGitHubClient:
             "repo": payload["repository"]["full_name"],
             "pr_number": pr["number"],
             "head_sha": pr["head"]["sha"],
+            "before_sha": payload.get("before", ""),
             "action": payload["action"],
         }
+
+    def is_markdown_only_update(self, repo: str, before_sha: str, head_sha: str) -> bool:
+        return (repo, before_sha, head_sha) in self.markdown_only_updates
 
     def load_pull_request(self, repo: str, pr_number: int) -> PullRequestSnapshot:
         assert repo == self.snapshot.repo
@@ -288,6 +293,70 @@ def test_workflow_happy_path_publishes_patch_preview() -> None:
     assert "timeout" in github.published_bodies[0]
     expected_seed = "acme/project#7:head123"
     assert result["session_id"] == hashlib.sha256(expected_seed.encode("utf-8")).hexdigest()[:16]
+
+
+def test_markdown_only_synchronize_event_is_ignored() -> None:
+    snapshot = make_snapshot()
+    github = FakeGitHubClient(snapshot, markdown_only_updates={("acme/project", "prev123", "head123")})
+    llm = StubLLMClient(
+        GenerationDecision(
+            decision="update",
+            confidence=0.92,
+            comment="Should not run.",
+            proposed_changes=[],
+        )
+    )
+    workflow = DocSyncWorkflow(make_settings(), github, llm)
+
+    result = workflow.run_once(
+        {
+            "action": "synchronize",
+            "before": "prev123",
+            "repository": {"full_name": "acme/project"},
+            "pull_request": {"number": 7, "head": {"sha": "head123"}},
+        }
+    )
+
+    assert result["outcome"] == "ignored"
+    assert result["error_code"] == "markdown_only_update"
+    assert llm.calls == 0
+    assert not github.published_bodies
+    assert not github.published_patches
+
+
+def test_synchronize_event_with_code_changes_still_runs() -> None:
+    snapshot = make_snapshot()
+    github = FakeGitHubClient(snapshot)
+    llm = StubLLMClient(
+        GenerationDecision(
+            decision="update",
+            confidence=0.92,
+            comment="Document the new timeout parameter.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": "- `timeout` controls request timeout in seconds.",
+                    "rationale": "The API signature changed.",
+                }
+            ],
+        )
+    )
+    workflow = DocSyncWorkflow(make_settings(), github, llm)
+
+    result = workflow.run_once(
+        {
+            "action": "synchronize",
+            "before": "prev123",
+            "repository": {"full_name": "acme/project"},
+            "pull_request": {"number": 7, "head": {"sha": "head123"}},
+        }
+    )
+
+    assert result["outcome"] == "commented"
+    assert llm.calls == 1
+    assert github.published_bodies
 
 
 def test_llm_analysis_supports_non_obvious_change() -> None:

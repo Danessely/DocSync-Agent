@@ -79,3 +79,28 @@ def test_load_pull_request_omits_empty_authorization_header() -> None:
 
     assert captured_headers
     assert all("authorization" not in headers for headers in captured_headers)
+
+
+def test_is_markdown_only_update_uses_compare_endpoint() -> None:
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        if "/compare/base123...head123" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"files": [{"filename": "README.md"}, {"filename": "docs/usage.md"}]},
+            )
+        raise AssertionError(str(request.url))
+
+    client = GitHubApiClient(
+        token="TOKEN123",
+        webhook_secret="secret",
+        doc_allowlist=["README.md", "docs/"],
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.is_markdown_only_update("acme/project", "base123", "head123")
+
+    assert result is True
+    assert seen_urls == ["https://api.github.com/repos/acme/project/compare/base123...head123"]

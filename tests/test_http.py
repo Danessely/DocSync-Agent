@@ -14,10 +14,16 @@ from docsync.state_store import InMemorySessionStore
 
 
 class FakeGitHubClient:
-    def __init__(self, snapshot: PullRequestSnapshot, secret: str) -> None:
+    def __init__(
+        self,
+        snapshot: PullRequestSnapshot,
+        secret: str,
+        markdown_only_updates: set[tuple[str, str, str]] | None = None,
+    ) -> None:
         self.snapshot = snapshot
         self.secret = secret
         self.published = []
+        self.markdown_only_updates = markdown_only_updates or set()
 
     def verify_webhook_signature(self, body: bytes, signature: str | None) -> bool:
         expected = "sha256=" + hmac.new(self.secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
@@ -30,8 +36,12 @@ class FakeGitHubClient:
             "repo": payload["repository"]["full_name"],
             "pr_number": payload["pull_request"]["number"],
             "head_sha": payload["pull_request"]["head"]["sha"],
+            "before_sha": payload.get("before", ""),
             "action": payload["action"],
         }
+
+    def is_markdown_only_update(self, repo: str, before_sha: str, head_sha: str) -> bool:
+        return (repo, before_sha, head_sha) in self.markdown_only_updates
 
     def load_pull_request(self, repo: str, pr_number: int) -> PullRequestSnapshot:
         return self.snapshot
@@ -51,6 +61,14 @@ class FakeGitHubClient:
 
 
 class FakeLLMClient:
+    def analyze_change(self, snapshot):
+        del snapshot
+        raise RuntimeError("not_needed_for_http_test")
+
+    def select_retrieved_contexts(self, intent, candidates, max_candidates):
+        del intent, candidates, max_candidates
+        return []
+
     def generate_decision(self, payload):
         return GenerationDecision(
             decision="update",
@@ -71,6 +89,14 @@ class FakeLLMClient:
 class ClarificationAwareLLMClient:
     def __init__(self) -> None:
         self.calls = 0
+
+    def analyze_change(self, snapshot):
+        del snapshot
+        raise RuntimeError("not_needed_for_http_test")
+
+    def select_retrieved_contexts(self, intent, candidates, max_candidates):
+        del intent, candidates, max_candidates
+        return []
 
     def generate_decision(self, payload):
         self.calls += 1
@@ -223,6 +249,35 @@ async def test_github_webhook_ignores_unsupported_action() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ignored"
+
+
+@pytest.mark.anyio
+async def test_github_webhook_ignores_markdown_only_synchronize_update() -> None:
+    secret = "topsecret"
+    snapshot = make_snapshot()
+    app = create_app(
+        settings=Settings(github_webhook_secret=secret, dry_run=False),
+        github_client=FakeGitHubClient(
+            snapshot,
+            secret,
+            markdown_only_updates={("acme/project", "prev123", "sha123")},
+        ),
+        llm_client=FakeLLMClient(),
+    )
+    payload = {
+        "action": "synchronize",
+        "before": "prev123",
+        "repository": {"full_name": "acme/project"},
+        "pull_request": {"number": 9, "head": {"sha": "sha123"}},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await signed_json_request(client, secret, payload)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    assert response.json()["error_code"] == "markdown_only_update"
 
 
 @pytest.mark.anyio

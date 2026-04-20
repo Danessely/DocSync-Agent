@@ -60,6 +60,26 @@ class WorkflowNodes:
         session_seed = f"{event['repo']}#{event['pr_number']}:{event['head_sha']}"
         session_id = hashlib.sha256(session_seed.encode("utf-8")).hexdigest()[:16]
         LOGGER.info("ingest", extra={"session_id": session_id, "repo": event["repo"], "pr_number": event["pr_number"]})
+        if (
+            event["action"] == "synchronize"
+            and event.get("before_sha")
+            and self._github.is_markdown_only_update(
+                event["repo"],
+                event["before_sha"],
+                event["head_sha"],
+            )
+        ):
+            return {
+                "stage": "ingest",
+                "repo": event["repo"],
+                "pr_number": event["pr_number"],
+                "head_sha": event["head_sha"],
+                "event_action": event["action"],
+                "session_id": session_id,
+                "trace_id": session_id,
+                "outcome": "ignored",
+                "error_code": "markdown_only_update",
+            }
         return {
             "stage": "ingest",
             "repo": event["repo"],

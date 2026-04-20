@@ -4,6 +4,8 @@ from .state import PRSessionState
 
 
 def route_after_ingest(state: PRSessionState) -> str:
+    if state.get("outcome") == "ignored":
+        return "complete"
     return "load_pr" if state.get("repo") and state.get("pr_number") else "complete"
 
 
