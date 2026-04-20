@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from langsmith import traceable
 from langgraph.graph import END, START, StateGraph
 
 from ..config import Settings
@@ -72,10 +73,12 @@ class DocSyncWorkflow:
         graph.add_edge("complete", END)
         return graph.compile()
 
+    @traceable(run_type="chain", name="docsync_graph_invoke")
     def invoke(self, payload: dict) -> PRSessionState:
         LOGGER.info("workflow_invoke")
         return self._graph.invoke({"event_payload": payload})
 
+    @traceable(run_type="chain", name="docsync_run")
     def run_once(self, payload: dict) -> PRSessionState:
         state: PRSessionState = {"event_payload": payload}
         state.update(self._nodes.ingest(state))

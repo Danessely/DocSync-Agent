@@ -5,6 +5,8 @@ import json
 import logging
 from textwrap import dedent
 
+from langsmith import traceable
+
 from ..analysis import analyze_pull_request
 from ..config import Settings
 from ..models import ClarificationResult, DocPatch, GenerationInput
@@ -31,6 +33,7 @@ class WorkflowNodes:
         self._patch_builder = PatchBuilder()
         self._validator = PatchValidator(settings)
 
+    @traceable(run_type="tool", name="ingest")
     def ingest(self, state: PRSessionState) -> PRSessionState:
         event = self._github.parse_pull_request_event(state["event_payload"])
         if not event:
@@ -53,22 +56,26 @@ class WorkflowNodes:
             "min_confidence": self._settings.min_confidence,
         }
 
+    @traceable(run_type="tool", name="load_pr")
     def load_pr(self, state: PRSessionState) -> PRSessionState:
         snapshot = self._github.load_pull_request(state["repo"], state["pr_number"])
         return {"stage": "load_pr", "pr_snapshot": snapshot}
 
+    @traceable(run_type="tool", name="analyze_diff")
     def analyze_diff(self, state: PRSessionState) -> PRSessionState:
         snapshot = state["pr_snapshot"]
         intent = analyze_pull_request(snapshot, self._settings.max_diff_lines)
         outcome = "analysis_complete" if intent.supported else "fallback_comment"
         return {"stage": "analyze_diff", "change_intent": intent, "outcome": outcome}
 
+    @traceable(run_type="tool", name="retrieve_docs")
     def retrieve_docs(self, state: PRSessionState) -> PRSessionState:
         snapshot = state["pr_snapshot"]
         intent = state["change_intent"]
         results = retrieve_context(snapshot.doc_files, intent, self._settings.max_doc_candidates)
         return {"stage": "retrieve_docs", "retrieval_result": results}
 
+    @traceable(run_type="tool", name="build_context")
     def build_context(self, state: PRSessionState) -> PRSessionState:
         snapshot = state["pr_snapshot"]
         intent = state["change_intent"]
@@ -90,22 +97,26 @@ class WorkflowNodes:
         )
         return {"stage": "build_context", "generation_input": generation_input}
 
+    @traceable(run_type="llm", name="generate")
     def generate(self, state: PRSessionState) -> PRSessionState:
         decision = self._llm.generate_decision(state["generation_input"])
         return {"stage": "generate", "llm_decision": decision}
 
+    @traceable(run_type="tool", name="build_patch")
     def build_patch(self, state: PRSessionState) -> PRSessionState:
         snapshot = state["pr_snapshot"]
         decision = state["llm_decision"]
         patch = self._patch_builder.build(snapshot.doc_files, decision)
         return {"stage": "build_patch", "doc_patch": patch}
 
+    @traceable(run_type="tool", name="validate")
     def validate(self, state: PRSessionState) -> PRSessionState:
         patch = state.get("doc_patch") or DocPatch(entries=[], summary="")
         report = self._validator.validate(state["pr_snapshot"], patch)
         outcome = "ready_to_publish" if report.is_valid else "fallback_comment"
         return {"stage": "validate", "validation_report": report, "outcome": outcome}
 
+    @traceable(run_type="tool", name="publish")
     def publish(self, state: PRSessionState) -> PRSessionState:
         snapshot = state.get("pr_snapshot")
         body = self._format_comment(state)
@@ -140,6 +151,7 @@ class WorkflowNodes:
             outcome = "failed"
         return {"stage": "publish", "publish_result": publish_result, "outcome": outcome}
 
+    @traceable(run_type="tool", name="clarify")
     def clarify(self, state: PRSessionState) -> PRSessionState:
         snapshot = state.get("pr_snapshot")
         question = self._format_clarification_question(state)
@@ -179,6 +191,7 @@ class WorkflowNodes:
             "outcome": "asked_human",
         }
 
+    @traceable(run_type="tool", name="complete")
     def complete(self, state: PRSessionState) -> PRSessionState:
         return {"stage": "complete"}
 
