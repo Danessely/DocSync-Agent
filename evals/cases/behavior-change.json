@@ -1,0 +1,38 @@
+{
+  "name": "behavior-change",
+  "scenario": "behavior_change",
+  "tags": ["behavior"],
+  "event_payload": {
+    "action": "opened",
+    "repository": {"full_name": "acme/project"},
+    "pull_request": {"number": 105, "head": {"sha": "head105"}}
+  },
+  "pr_snapshot": {
+    "repo": "acme/project",
+    "pr_number": 105,
+    "title": "Change retry scheduling behavior",
+    "body": "Retries now back off more aggressively.",
+    "base_sha": "base105",
+    "head_sha": "head105",
+    "head_ref": "feature/retry",
+    "changed_files": [
+      {
+        "path": "src/retry.py",
+        "status": "modified",
+        "patch": "@@\n-next_delay = min(current_delay * 2, 30)\n+next_delay = min(current_delay * 3, 90)\n"
+      }
+    ],
+    "diff_text": "diff --git a/src/retry.py b/src/retry.py\n@@\n-next_delay = min(current_delay * 2, 30)\n+next_delay = min(current_delay * 3, 90)\n",
+    "doc_files": {
+      "README.md": "# Project\n\n## Behavior\n\nRetries back off after transient failures.\n"
+    },
+    "doc_file_shas": {
+      "README.md": "sha-readme-105"
+    }
+  },
+  "expectation": {
+    "expected_outcomes": ["commented"],
+    "expected_doc_paths": ["README.md"],
+    "expect_doc_patch": true
+  }
+}

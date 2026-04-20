@@ -1,0 +1,38 @@
+{
+  "name": "function-rename",
+  "scenario": "rename",
+  "tags": ["api", "rename"],
+  "event_payload": {
+    "action": "opened",
+    "repository": {"full_name": "acme/project"},
+    "pull_request": {"number": 102, "head": {"sha": "head102"}}
+  },
+  "pr_snapshot": {
+    "repo": "acme/project",
+    "pr_number": 102,
+    "title": "Rename fetch_data to request_data",
+    "body": "User-facing helper was renamed.",
+    "base_sha": "base102",
+    "head_sha": "head102",
+    "head_ref": "feature/rename",
+    "changed_files": [
+      {
+        "path": "src/client.py",
+        "status": "modified",
+        "patch": "@@\n-def fetch_data(url):\n+def request_data(url):\n"
+      }
+    ],
+    "diff_text": "diff --git a/src/client.py b/src/client.py\n@@\n-def fetch_data(url):\n+def request_data(url):\n",
+    "doc_files": {
+      "README.md": "# Project\n\n## API\n\nUse the client helper to request data.\n"
+    },
+    "doc_file_shas": {
+      "README.md": "sha-readme-102"
+    }
+  },
+  "expectation": {
+    "expected_outcomes": ["commented"],
+    "expected_doc_paths": ["README.md"],
+    "expect_doc_patch": true
+  }
+}

@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+
+import httpx
+import pytest
+
+from docsync.config import Settings
+from docsync.main import create_app
+from docsync.models import ChangedFile, GenerationDecision, PublishResult, PullRequestSnapshot
+from docsync.state_store import InMemorySessionStore
+
+
+class FakeGitHubClient:
+    def __init__(
+        self,
+        snapshot: PullRequestSnapshot,
+        secret: str,
+        markdown_only_updates: set[tuple[str, str, str]] | None = None,
+    ) -> None:
+        self.snapshot = snapshot
+        self.secret = secret
+        self.published = []
+        self.markdown_only_updates = markdown_only_updates or set()
+
+    def verify_webhook_signature(self, body: bytes, signature: str | None) -> bool:
+        expected = "sha256=" + hmac.new(self.secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        return signature == expected
+
+    def parse_pull_request_event(self, payload):
+        if payload["action"] == "closed":
+            return None
+        return {
+            "repo": payload["repository"]["full_name"],
+            "pr_number": payload["pull_request"]["number"],
+            "head_sha": payload["pull_request"]["head"]["sha"],
+            "before_sha": payload.get("before", ""),
+            "action": payload["action"],
+        }
+
+    def is_markdown_only_update(self, repo: str, before_sha: str, head_sha: str) -> bool:
+        return (repo, before_sha, head_sha) in self.markdown_only_updates
+
+    def load_pull_request(self, repo: str, pr_number: int) -> PullRequestSnapshot:
+        return self.snapshot
+
+    def publish_comment(self, repo: str, pr_number: int, body: str) -> PublishResult:
+        self.published.append(body)
+        return PublishResult(mode="comment_only", published=True, comment_body=body, comment_id=42)
+
+    def publish_patch(self, snapshot: PullRequestSnapshot, patch, session_id: str, summary: str) -> PublishResult:
+        return PublishResult(
+            mode="commit_patch",
+            published=True,
+            commit_shas=["commit123"],
+            committed_files=[entry.doc_path for entry in patch.entries],
+            details=summary,
+        )
+
+
+class FakeLLMClient:
+    def analyze_change(self, snapshot):
+        del snapshot
+        raise RuntimeError("not_needed_for_http_test")
+
+    def select_retrieved_contexts(self, intent, candidates, max_candidates):
+        del intent, candidates, max_candidates
+        return []
+
+    def generate_decision(self, payload):
+        return GenerationDecision(
+            decision="update",
+            confidence=0.9,
+            comment="Update docs.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": "- Added a timeout parameter.",
+                    "rationale": "signature change",
+                }
+            ],
+        )
+
+
+class ClarificationAwareLLMClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def analyze_change(self, snapshot):
+        del snapshot
+        raise RuntimeError("not_needed_for_http_test")
+
+    def select_retrieved_contexts(self, intent, candidates, max_candidates):
+        del intent, candidates, max_candidates
+        return []
+
+    def generate_decision(self, payload):
+        self.calls += 1
+        if not getattr(payload, "human_clarification", ""):
+            return GenerationDecision(
+                decision="ask_human",
+                confidence=0.2,
+                comment="Need clarification.",
+                proposed_changes=[],
+            )
+        return GenerationDecision(
+            decision="update",
+            confidence=0.95,
+            comment="Clarified update.",
+            proposed_changes=[
+                {
+                    "doc_path": "README.md",
+                    "section_title": "API",
+                    "operation": "append",
+                    "content": f"- {payload.human_clarification}",
+                    "rationale": "reply",
+                }
+            ],
+        )
+
+
+class FakeTelegramClient:
+    def __init__(self) -> None:
+        self.sent_messages: list[str] = []
+
+    def send_message(self, text: str):
+        self.sent_messages.append(text)
+        return {"channel": "telegram", "sent": True, "message": text}
+
+    def parse_reply(self, payload):
+        message = payload.get("message") or {}
+        if "text" not in message:
+            return None
+        return {
+            "chat_id": str((message.get("chat") or {}).get("id")),
+            "text": message["text"],
+            "message_id": message.get("message_id"),
+            "reply_to_text": ((message.get("reply_to_message") or {}).get("text")) or "",
+        }
+
+
+def make_snapshot() -> PullRequestSnapshot:
+    return PullRequestSnapshot(
+        repo="acme/project",
+        pr_number=9,
+        title="Add timeout parameter",
+        body="",
+        head_sha="sha123",
+        head_ref="feature/docsync",
+        diff_text="""diff --git a/src/client.py b/src/client.py
+@@
+-def fetch_data(url):
++def fetch_data(url, timeout=30):
+""",
+        changed_files=[ChangedFile(path="src/client.py", patch="+def fetch_data(url, timeout=30):")],
+        doc_files={"README.md": "# Project\n\n## API\n\nUse `fetch_data(url)`.\n"},
+        doc_file_shas={"README.md": "sha-readme"},
+    )
+
+
+def sign(secret: str, body: bytes) -> str:
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+async def signed_json_request(client: httpx.AsyncClient, secret: str, payload: dict):
+    body = json.dumps(payload).encode("utf-8")
+    return await client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": sign(secret, body),
+        },
+    )
+
+
+@pytest.mark.anyio
+async def test_github_webhook_accepts_valid_signature() -> None:
+    secret = "topsecret"
+    snapshot = make_snapshot()
+    app = create_app(
+        settings=Settings(github_webhook_secret=secret, dry_run=False),
+        github_client=FakeGitHubClient(snapshot, secret),
+        llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
+    )
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/project"},
+        "pull_request": {"number": 9, "head": {"sha": "sha123"}},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await signed_json_request(client, secret, payload)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "commented"
+
+
+@pytest.mark.anyio
+async def test_github_webhook_rejects_bad_signature() -> None:
+    secret = "topsecret"
+    snapshot = make_snapshot()
+    app = create_app(
+        settings=Settings(github_webhook_secret=secret, dry_run=False),
+        github_client=FakeGitHubClient(snapshot, secret),
+        llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
+    )
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/project"},
+        "pull_request": {"number": 9, "head": {"sha": "sha123"}},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/webhooks/github",
+            content=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-Hub-Signature-256": "sha256=bad"},
+        )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_github_webhook_ignores_unsupported_action() -> None:
+    secret = "topsecret"
+    snapshot = make_snapshot()
+    app = create_app(
+        settings=Settings(github_webhook_secret=secret, dry_run=False),
+        github_client=FakeGitHubClient(snapshot, secret),
+        llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
+    )
+    payload = {
+        "action": "closed",
+        "repository": {"full_name": "acme/project"},
+        "pull_request": {"number": 9, "head": {"sha": "sha123"}},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await signed_json_request(client, secret, payload)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+
+
+@pytest.mark.anyio
+async def test_github_webhook_ignores_markdown_only_synchronize_update() -> None:
+    secret = "topsecret"
+    snapshot = make_snapshot()
+    app = create_app(
+        settings=Settings(github_webhook_secret=secret, dry_run=False),
+        github_client=FakeGitHubClient(
+            snapshot,
+            secret,
+            markdown_only_updates={("acme/project", "prev123", "sha123")},
+        ),
+        llm_client=FakeLLMClient(),
+        state_store=InMemorySessionStore(),
+    )
+    payload = {
+        "action": "synchronize",
+        "before": "prev123",
+        "repository": {"full_name": "acme/project"},
+        "pull_request": {"number": 9, "head": {"sha": "sha123"}},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await signed_json_request(client, secret, payload)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
+    assert response.json()["error_code"] == "markdown_only_update"
+
+
+@pytest.mark.anyio
+async def test_telegram_webhook_resumes_pending_clarification() -> None:
+    secret = "topsecret"
+    snapshot = make_snapshot()
+    telegram = FakeTelegramClient()
+    llm = ClarificationAwareLLMClient()
+    store = InMemorySessionStore()
+    app = create_app(
+        settings=Settings(github_webhook_secret=secret, dry_run=False),
+        github_client=FakeGitHubClient(snapshot, secret),
+        llm_client=llm,
+        telegram_client=telegram,
+        state_store=store,
+    )
+
+    github_payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/project"},
+        "pull_request": {"number": 9, "head": {"sha": "sha123"}},
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        initial = await signed_json_request(client, secret, github_payload)
+        assert initial.status_code == 200
+        assert initial.json()["status"] == "asked_human"
+        assert telegram.sent_messages
+        outbound = telegram.sent_messages[0]
+
+        telegram_reply = {
+            "message": {
+                "message_id": 55,
+                "chat": {"id": "chat-1"},
+                "text": "Please mention the timeout parameter in README.",
+                "reply_to_message": {"text": outbound},
+            }
+        }
+        resumed = await client.post("/webhooks/telegram", json=telegram_reply)
+
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "commented"

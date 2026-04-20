@@ -1,0 +1,33 @@
+{
+  "event_payload": {
+    "action": "opened",
+    "repository": {
+      "full_name": "acme/project"
+    },
+    "pull_request": {
+      "number": 10,
+      "head": {
+        "sha": "head123"
+      }
+    }
+  },
+  "pr_snapshot": {
+    "repo": "acme/project",
+    "pr_number": 10,
+    "title": "Add timeout parameter",
+    "body": "Snapshot replay for local testing.",
+    "base_sha": "base123",
+    "head_sha": "head123",
+    "changed_files": [
+      {
+        "path": "src/client.py",
+        "status": "modified",
+        "patch": "@@\n-def fetch_data(url):\n+def fetch_data(url, timeout=30):\n     return call(url)\n"
+      }
+    ],
+    "diff_text": "diff --git a/src/client.py b/src/client.py\n@@\n-def fetch_data(url):\n+def fetch_data(url, timeout=30):\n     return call(url)\n",
+    "doc_files": {
+      "README.md": "# Project\n\n## API\n\nUse `fetch_data(url)` to request data.\n"
+    }
+  }
+}
