@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 
-import httpx
-
-from docsync.adapters.llm import OpenAICompatibleLLMClient
+from docsync.adapters.llm import ChatOpenAILLMClient
 from docsync.config import Settings
 from docsync.graph.workflow import DocSyncWorkflow
 from docsync.models import ChangedFile, GenerationDecision, PublishResult, PullRequestSnapshot
@@ -198,42 +197,32 @@ def test_validator_rejects_path_outside_allowlist() -> None:
 
 
 def test_llm_client_retries_once_on_invalid_schema() -> None:
-    responses = iter(
-        [
-            httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": '{"decision":"update"}'}}]},
-            ),
-            httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "content": """
-                                {
-                                  "decision": "skip",
-                                  "confidence": 0.2,
-                                  "comment": "Need more context",
-                                  "proposed_changes": []
-                                }
-                                """
-                            }
-                        }
-                    ]
-                },
-            ),
-        ]
-    )
     calls = {"count": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls["count"] += 1
-        return next(responses)
+    class FakeChatModel:
+        def __init__(self) -> None:
+            self._responses = iter(
+                [
+                    SimpleNamespace(content='{"decision":"update"}'),
+                    SimpleNamespace(
+                        content="""
+                        {
+                          "decision": "skip",
+                          "confidence": 0.2,
+                          "comment": "Need more context",
+                          "proposed_changes": []
+                        }
+                        """
+                    ),
+                ]
+            )
 
-    transport = httpx.MockTransport(handler)
+        def invoke(self, messages):
+            calls["count"] += 1
+            return next(self._responses)
+
     settings = make_settings(llm_provider="openai", llm_api_base_url="https://llm.test", llm_model="gpt-test")
-    client = OpenAICompatibleLLMClient(settings, transport=transport)
+    client = ChatOpenAILLMClient(settings, chat_model=FakeChatModel())
     decision = client.generate_decision(
         payload={
             "policy": "safe",
@@ -246,4 +235,3 @@ def test_llm_client_retries_once_on_invalid_schema() -> None:
 
     assert decision.decision == "skip"
     assert calls["count"] == 2
-

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Protocol
 
-import httpx
+from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
 from ..config import Settings
@@ -28,21 +27,21 @@ def _strip_code_fences(content: str) -> str:
     return stripped
 
 
-class OpenAICompatibleLLMClient:
+class ChatOpenAILLMClient:
     def __init__(
         self,
         settings: Settings,
-        transport: httpx.BaseTransport | None = None,
+        chat_model: Any | None = None,
     ) -> None:
         self._settings = settings
-        self._client = httpx.Client(
-            base_url=settings.llm_api_base_url.rstrip("/"),
+        self._chat_model = chat_model or ChatOpenAI(
+            model=settings.llm_model,
+            temperature=0.1,
             timeout=settings.llm_timeout_sec,
-            headers={
-                "Authorization": f"Bearer {settings.llm_api_key}" if settings.llm_api_key else "",
-                "Content-Type": "application/json",
-            },
-            transport=transport,
+            max_retries=0,
+            api_key=settings.llm_api_key or None,
+            base_url=settings.llm_api_base_url or None,
+            model_kwargs={"response_format": {"type": "json_object"}},
         )
 
     def generate_decision(self, payload: GenerationInput) -> GenerationDecision:
@@ -65,22 +64,35 @@ class OpenAICompatibleLLMClient:
                 raise LLMError("invalid_schema") from exc
 
     def _request_completion(self, messages: list[dict[str, str]]) -> str:
-        response = self._client.post(
-            "/chat/completions",
-            json={
-                "model": self._settings.llm_model,
-                "temperature": 0.1,
-                "response_format": {"type": "json_object"},
-                "messages": messages,
-            },
-        )
-        if response.status_code >= 400:
-            raise LLMError(f"provider_error_{response.status_code}")
-        payload = response.json()
         try:
-            return payload["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            response = self._chat_model.invoke(messages)
+        except Exception as exc:
+            raise LLMError("provider_error") from exc
+
+        try:
+            return _extract_content_text(response)
+        except (AttributeError, TypeError, ValueError) as exc:
             raise LLMError("invalid_provider_payload") from exc
+
+
+def _extract_content_text(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        flattened = "\n".join(part for part in parts if part).strip()
+        if flattened:
+            return flattened
+    raise ValueError("Response did not include string content.")
 
 
 class MockLLMClient:

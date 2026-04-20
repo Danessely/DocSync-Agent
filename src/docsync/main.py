@@ -7,7 +7,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
 from .adapters.github import GitHubApiClient
-from .adapters.llm import MockLLMClient, OpenAICompatibleLLMClient
+from .adapters.llm import ChatOpenAILLMClient, MockLLMClient
 from .config import Settings
 from .graph.workflow import DocSyncWorkflow
 
@@ -15,7 +15,7 @@ from .graph.workflow import DocSyncWorkflow
 def _build_llm_client(settings: Settings):
     if settings.llm_provider == "mock":
         return MockLLMClient()
-    return OpenAICompatibleLLMClient(settings)
+    return ChatOpenAILLMClient(settings)
 
 
 def create_app(

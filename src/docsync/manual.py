@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .adapters.llm import MockLLMClient, OpenAICompatibleLLMClient
+from .adapters.llm import ChatOpenAILLMClient, MockLLMClient
 from .config import Settings
 from .graph.workflow import DocSyncWorkflow
 from .models import PublishResult, PullRequestSnapshot
@@ -58,7 +58,7 @@ def load_snapshot_bundle(path: str | Path) -> SnapshotBundle:
 def _build_llm_client(settings: Settings):
     if settings.llm_provider == "mock":
         return MockLLMClient()
-    return OpenAICompatibleLLMClient(settings)
+    return ChatOpenAILLMClient(settings)
 
 
 def run_snapshot(
